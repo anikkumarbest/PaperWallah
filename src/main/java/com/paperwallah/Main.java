@@ -3,6 +3,7 @@ import com.paperwallah.model.*;
 import com.paperwallah.service.*;
 import com.paperwallah.strategy.*;
 import java.io.*;
+import java.nio.file.Files;
 import java.util.*;
 import java.util.stream.Collectors;
 import javafx.application.Application;
@@ -10,6 +11,7 @@ import javafx.collections.*;
 import javafx.collections.transformation.FilteredList;
 import javafx.event.ActionEvent;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.print.PrinterJob;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
@@ -31,7 +33,8 @@ public class Main extends Application {
     private final Label totalLbl = new Label();
     private final VBox pv = new VBox(4);
     private final ChoiceBox<String> printKind = new ChoiceBox<>(FXCollections.observableArrayList("Question Paper", "Answer Key", "Blueprint"));
-    private final Label dash = new Label();
+    private final Label sQ = new Label(), sT = new Label(), sP = new Label();
+    private final String css = Main.class.getResource("/style.css").toExternalForm();
 
     static class Draft { String q = "", a = "", topic = ""; int marks = 1; Difficulty d = Difficulty.MEDIUM; List<String> imgs = new ArrayList<>(); }
 
@@ -41,16 +44,18 @@ public class Main extends Application {
             tab("Paper Editor", editorTab()), tab("Saved Papers", savedTab()), tab("Print Preview", printTab()));
         tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> refreshDash());
         refreshDash();
-        s.setScene(new Scene(tabs, 1000, 680)); s.setTitle("PaperWallah"); s.show();
+        Scene sc = new Scene(tabs, 1050, 700); sc.getStylesheets().add(css);
+        sc.getRoot().lookupAll(".button").forEach(n -> { if (n instanceof Button bt && (bt.getText().equals("Delete") || bt.getText().equals("Remove"))) bt.getStyleClass().add("danger"); });
+        s.setScene(sc); s.setTitle("PaperWallah"); s.show();
     }
     private Tab tab(String n, javafx.scene.Node c) { Tab t = new Tab(n, c); t.setClosable(false); return t; }
-    private void alert(String m) { new Alert(Alert.AlertType.WARNING, m).showAndWait(); }
-    private boolean confirm(String m) { return new Alert(Alert.AlertType.CONFIRMATION, m).showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK; }
+    private void style(Dialog<?> d) { d.getDialogPane().getStylesheets().add(css); }
+    private void alert(String m) { Alert a = new Alert(Alert.AlertType.WARNING, m); style(a); a.showAndWait(); }
+    private boolean confirm(String m) { Alert a = new Alert(Alert.AlertType.CONFIRMATION, m); style(a); return a.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK; }
     private void saveBank() { try { st.saveQuestions(bank); } catch (IOException e) { alert("Could not save questions: " + e.getMessage()); } }
     private void savePapers() { try { st.savePapers(papers); } catch (IOException e) { alert("Could not save papers: " + e.getMessage()); } }
     private void refreshDash() {
-        long topics = bank.stream().map(Question::getTopic).distinct().count();
-        dash.setText("Questions: " + bank.size() + "\nTopics: " + topics + "\nSaved papers: " + papers.size());
+        sQ.setText("" + bank.size()); sT.setText("" + bank.stream().map(Question::getTopic).distinct().count()); sP.setText("" + papers.size());
     }
     private Paper deepCopy(Paper p) {
         try (ByteArrayOutputStream b = new ByteArrayOutputStream(); ObjectOutputStream o = new ObjectOutputStream(b)) {
@@ -59,38 +64,118 @@ public class Main extends Application {
         } catch (IOException | ClassNotFoundException e) { throw new IllegalStateException(e); }
     }
     private TextArea area(String text, int rows) { TextArea a = new TextArea(text); a.setPrefRowCount(rows); a.setFont(Font.font("Monospaced", 13)); return a; }
-    private VBox page(javafx.scene.Node... n) { VBox v = new VBox(8, n); v.setPadding(new Insets(12)); return v; }
+    private VBox page(javafx.scene.Node... n) {
+        VBox v = new VBox(10, n); v.setPadding(new Insets(14));
+        for (javafx.scene.Node x : n) if (x instanceof HBox hb) hb.setAlignment(Pos.CENTER);
+        return v;
+    }
+    private VBox titled(String t, javafx.scene.Node... n) {
+        Label h = new Label(t); h.getStyleClass().add("h1"); h.setMaxWidth(Double.MAX_VALUE); h.setAlignment(Pos.CENTER);
+        VBox v = page(n); v.getChildren().add(0, h); return v;
+    }
 
     /* ---------- Dashboard ---------- */
+    private VBox statCard(Label num, String cap) { num.getStyleClass().add("stat-num"); VBox c = new VBox(2, num, new Label(cap)); c.getStyleClass().add("card"); c.setMinWidth(170); return c; }
     private javafx.scene.Node dashTab() {
-        dash.setFont(Font.font(22));
-        Button go = new Button("Go to Question Bank"); go.setOnAction(e -> tabs.getSelectionModel().select(1));
-        Button gen = new Button("Generate a paper"); gen.setOnAction(e -> tabs.getSelectionModel().select(2));
-        return page(new Label("PaperWallah - Smart Question Paper Generator"), dash, new HBox(8, go, gen));
+        Label hero = new Label("PaperWallah"); hero.getStyleClass().add("hero");
+        Label sub = new Label("Smart Question Paper Generator  -  fully offline"); sub.getStyleClass().add("sub");
+        HBox stats = new HBox(20, statCard(sQ, "Questions"), statCard(sT, "Topics used (of 60)"), statCard(sP, "Saved papers")); stats.setAlignment(Pos.CENTER);
+        Button go = new Button("Question Bank"), gen = new Button("Generate a paper");
+        go.setOnAction(e -> tabs.getSelectionModel().select(1)); gen.setOnAction(e -> tabs.getSelectionModel().select(2));
+        Button smp = new Button("Load sample questions"), imp = new Button("Import questions (CSV)"), rms = new Button("Remove sample questions");
+        smp.setOnAction(e -> loadSamples()); imp.setOnAction(e -> importCsv()); rms.setOnAction(e -> removeSamples());
+        HBox btns = new HBox(14, go, gen, smp, imp, rms); btns.setAlignment(Pos.CENTER);
+        VBox v = new VBox(26, hero, sub, stats, btns); v.setAlignment(Pos.CENTER); return v;
+    }
+    /** 3 sample questions (1, 3 and 5 marks) for every one of the 60 topics = 180 questions, all marked [SAMPLE]. */
+    private void loadSamples() {
+        if (!confirm("Add 180 sample questions (3 per topic)? You can remove them later.")) return;
+        Difficulty[] dl = Difficulty.values(); int k = 0;
+        for (String topic : Topics.ALL) for (int m : new int[]{1, 3, 5}) {
+            String q = m == 1 ? "[SAMPLE] Which statement is correct about: " + topic + "?\nA) Option one\nB) Option two\nC) Option three\nD) Option four"
+                : "[SAMPLE] " + (m == 3 ? "Briefly explain" : "Explain in detail with an example") + ": " + topic;
+            bank.add(new Question(editSvc.nextId(), q, m == 1 ? "B" : "[SAMPLE] Model answer for " + topic, m, dl[k++ % 3], topic));
+        }
+        saveBank(); refreshDash();
+    }
+    private void removeSamples() {
+        if (confirm("Delete every question whose text starts with [SAMPLE]?")) { bank.removeIf(q -> q.getQuestionContent().startsWith("[SAMPLE]")); saveBank(); refreshDash(); }
+    }
+    /** CSV columns: marks,difficulty,topic (number 1-60 or name),question,answer. Use \n inside a cell for a new line. */
+    private void importCsv() {
+        FileChooser fc = new FileChooser(); fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV files", "*.csv"));
+        File f = fc.showOpenDialog(stage); if (f == null) return;
+        List<String> lines; try { lines = Files.readAllLines(f.toPath()); } catch (IOException | RuntimeException ex) { alert("Could not read the file (save it as UTF-8 CSV): " + ex.getMessage()); return; }
+        int added = 0; List<String> bad = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            String line = lines.get(i).replace("\uFEFF", ""); if (line.isBlank()) continue;
+            List<String> c = csvLine(line);
+            if (i == 0 && !c.get(0).trim().matches("\\d+")) continue; // header row
+            try {
+                if (c.size() < 5) throw new IllegalArgumentException("needs 5 columns");
+                int marks = Integer.parseInt(c.get(0).trim()); if (marks <= 0) throw new IllegalArgumentException("marks must be positive");
+                Difficulty d = Difficulty.valueOf(c.get(1).trim().toUpperCase());
+                String topic = Topics.resolve(c.get(2).trim()); if (!Topics.ALL.contains(topic)) throw new IllegalArgumentException("unknown topic");
+                String q = c.get(3).replace("\\n", "\n").trim(), a = c.get(4).replace("\\n", "\n").trim();
+                if (q.isEmpty() || a.isEmpty()) throw new IllegalArgumentException("question/answer empty");
+                bank.add(new Question(editSvc.nextId(), q, a, marks, d, topic)); added++;
+            } catch (RuntimeException ex) { bad.add("line " + (i + 1) + ": " + ex.getMessage()); }
+        }
+        saveBank(); refreshDash();
+        new Alert(Alert.AlertType.INFORMATION, "Imported " + added + " question(s)." + (bad.isEmpty() ? "" : "\nSkipped " + bad.size() + ":\n" + String.join("\n", bad.subList(0, Math.min(8, bad.size()))))).showAndWait();
+    }
+    private List<String> csvLine(String line) {
+        List<String> out = new ArrayList<>(); StringBuilder sb = new StringBuilder(); boolean q = false;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (q) { if (c == '"') { if (i + 1 < line.length() && line.charAt(i + 1) == '"') { sb.append('"'); i++; } else q = false; } else sb.append(c); }
+            else if (c == '"') q = true; else if (c == ',') { out.add(sb.toString()); sb.setLength(0); } else sb.append(c);
+        }
+        out.add(sb.toString()); return out;
+    }
+    private void editHeader() {
+        if (current == null) { alert("Open or generate a paper first."); return; }
+        Dialog<ButtonType> dlg = new Dialog<>(); dlg.setTitle("Edit paper header"); style(dlg);
+        TextField col = new TextField(current.getCollege()), ti = new TextField(current.getTitle()), su = new TextField(current.getSubject()), du = new TextField(current.getDuration());
+        du.setPromptText("e.g. 3 Hours"); TextArea in = area(current.getInstructions(), 4); in.setWrapText(true);
+        GridPane g = new GridPane(); g.setHgap(10); g.setVgap(8); g.setPadding(new Insets(12));
+        String[] names = {"College / institution", "Exam title", "Subject", "Duration", "Instructions"}; javafx.scene.Node[] f = {col, ti, su, du, in};
+        for (int i = 0; i < f.length; i++) { g.add(new Label(names[i]), 0, i); g.add(f[i], 1, i); ((Region) f[i]).setPrefWidth(420); }
+        dlg.getDialogPane().setContent(g); dlg.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        if (dlg.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
+            current.setCollege(col.getText().trim()); current.setTitle(ti.getText().trim()); current.setSubject(su.getText().trim());
+            current.setDuration(du.getText().trim()); current.setInstructions(in.getText().trim()); refreshEditor();
+        }
     }
 
     /* ---------- shared question form ---------- */
     private boolean form(String title, Draft d) {
-        Dialog<ButtonType> dlg = new Dialog<>(); dlg.setTitle(title);
-        TextArea q = area(d.q, 6), a = area(d.a, 3); TextField m = new TextField("" + d.marks), t = new TextField(d.topic);
+        Dialog<ButtonType> dlg = new Dialog<>(); dlg.setTitle(title); style(dlg);
+        TextArea q = area(d.q, 6), a = area(d.a, 3); TextField m = new TextField("" + d.marks);
+        ComboBox<String> t = new ComboBox<>(FXCollections.observableArrayList(Topics.ALL)); t.setPromptText("Select topic (60 syllabus topics)"); t.setMaxWidth(560);
+        if (Topics.ALL.contains(d.topic)) t.setValue(d.topic);
         ComboBox<Difficulty> df = new ComboBox<>(FXCollections.observableArrayList(Difficulty.values())); df.setValue(d.d);
+        List<String> added = new ArrayList<>();
         Label imgLbl = new Label(d.imgs.size() + " image(s) attached");
-        Button att = new Button("Attach image");
+        Button att = new Button("Attach image"), rm = new Button("Remove last image");
         att.setOnAction(e -> {
-            File f = new FileChooser().showOpenDialog(stage);
-            if (f != null) try { d.imgs.add(st.importImage(f)); imgLbl.setText(d.imgs.size() + " image(s) attached"); } catch (IOException ex) { alert("Could not copy image: " + ex.getMessage()); }
+            FileChooser fc = new FileChooser(); fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp"));
+            File f = fc.showOpenDialog(stage);
+            if (f != null) try { String p = st.importImage(f); d.imgs.add(p); added.add(p); imgLbl.setText(d.imgs.size() + " image(s) attached"); }
+            catch (IOException ex) { alert("Could not add image: " + ex.getMessage()); }
         });
+        rm.setOnAction(e -> { if (!d.imgs.isEmpty()) { String last = d.imgs.remove(d.imgs.size() - 1); if (added.remove(last)) st.deleteImage(last); imgLbl.setText(d.imgs.size() + " image(s) attached"); } });
         dlg.getDialogPane().setContent(page(new Label("Question (code: indentation kept; MCQ: write A) B) C) D) lines)"), q, new Label("Answer / correct option"), a,
-            new HBox(8, new Label("Marks"), m, new Label("Topic"), t, df), new HBox(8, att, imgLbl)));
+            new HBox(8, new Label("Marks"), m, new Label("Difficulty"), df), new HBox(8, new Label("Topic"), t), new HBox(8, att, rm, imgLbl)));
         dlg.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
         dlg.getDialogPane().lookupButton(ButtonType.OK).addEventFilter(ActionEvent.ACTION, ev -> {
             String err = q.getText().isBlank() ? "Question text is required." : a.getText().isBlank() ? "Answer is required."
-                : t.getText().isBlank() ? "Topic is required." : null;
+                : t.getValue() == null ? "Please select a topic." : null;
             try { if (Integer.parseInt(m.getText().trim()) <= 0) err = "Marks must be positive."; } catch (NumberFormatException ex) { err = "Marks must be a whole number."; }
             if (err != null) { alert(err); ev.consume(); }
         });
-        if (dlg.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return false;
-        d.q = q.getText(); d.a = a.getText(); d.topic = t.getText().trim(); d.marks = Integer.parseInt(m.getText().trim()); d.d = df.getValue();
+        if (dlg.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) { added.forEach(st::deleteImage); return false; }
+        d.q = q.getText(); d.a = a.getText(); d.topic = t.getValue(); d.marks = Integer.parseInt(m.getText().trim()); d.d = df.getValue();
         return true;
     }
 
@@ -99,12 +184,13 @@ public class Main extends Application {
         FilteredList<Question> shown = new FilteredList<>(bank, x -> true);
         TextField search = new TextField(); search.setPromptText("Search text or topic");
         ComboBox<Integer> mf = new ComboBox<>(); mf.setPromptText("Marks"); ComboBox<Difficulty> df = new ComboBox<>(FXCollections.observableArrayList(Difficulty.values())); df.setPromptText("Difficulty");
+        ComboBox<String> tf = new ComboBox<>(FXCollections.observableArrayList(Topics.ALL)); tf.setPromptText("Topic"); tf.setMaxWidth(240);
         Button clear = new Button("Clear filters");
         Runnable filt = () -> shown.setPredicate(x -> (search.getText().isBlank() || (x.getQuestionContent() + x.getTopic()).toLowerCase().contains(search.getText().toLowerCase()))
-            && (mf.getValue() == null || x.getMarks() == mf.getValue()) && (df.getValue() == null || x.getDifficulty() == df.getValue()));
-        search.textProperty().addListener((o, a, b) -> filt.run()); mf.setOnAction(e -> filt.run()); df.setOnAction(e -> filt.run());
+            && (mf.getValue() == null || x.getMarks() == mf.getValue()) && (df.getValue() == null || x.getDifficulty() == df.getValue()) && (tf.getValue() == null || tf.getValue().equals(x.getTopic())));
+        search.textProperty().addListener((o, a, b) -> filt.run()); mf.setOnAction(e -> filt.run()); tf.setOnAction(e -> filt.run()); df.setOnAction(e -> filt.run());
         mf.setItems(FXCollections.observableArrayList(1, 2, 3, 4, 5, 6, 8, 10));
-        clear.setOnAction(e -> { search.clear(); mf.setValue(null); df.setValue(null); });
+        clear.setOnAction(e -> { search.clear(); mf.setValue(null); df.setValue(null); tf.setValue(null); });
         TableView<Question> table = new TableView<>(shown);
         String[][] cols = {{"ID", "questionId"}, {"Marks", "marks"}, {"Level", "difficulty"}, {"Topic", "topic"}, {"Question", "questionContent"}};
         for (String[] c : cols) { TableColumn<Question, Object> col = new TableColumn<>(c[0]); col.setCellValueFactory(new PropertyValueFactory<>(c[1])); table.getColumns().add(col); }
@@ -127,20 +213,22 @@ public class Main extends Application {
         });
         del.setOnAction(e -> { Question q = table.getSelectionModel().getSelectedItem(); if (q != null && confirm("Delete question #" + q.getQuestionId() + "?")) { bank.remove(q); saveBank(); } });
         VBox.setVgrow(table, Priority.ALWAYS);
-        return page(new HBox(8, search, mf, df, clear), table, new HBox(8, add, edit, del), detail, iv, warn);
+        return titled("Question Bank", new HBox(8, search, mf, df, tf, clear), table, new HBox(8, add, edit, del), detail, iv, warn);
     }
 
     /* ---------- Generate ---------- */
     private javafx.scene.Node genTab() {
-        TextField title = new TextField("Examination"), subject = new TextField(), total = new TextField("50"), allowed = new TextField("1,3,5"), topic = new TextField();
-        topic.setPromptText("optional topic filter");
+        TextField title = new TextField("Examination"), subject = new TextField(), total = new TextField("50"), allowed = new TextField("1,3,5"), college = new TextField();
+        college.setPromptText("College / institution");
+        List<String> tl = new ArrayList<>(); tl.add("All topics"); tl.addAll(Topics.ALL);
+        ComboBox<String> topic = new ComboBox<>(FXCollections.observableArrayList(tl)); topic.setValue("All topics"); topic.setMaxWidth(260);
         Button gA = new Button("Generate (total marks)");
         TextArea bp = area("Section A,10,1\nSection B,5,3\nSection C,5,5", 6); TextField declared = new TextField("50");
         Button gB = new Button("Generate (blueprint)");
         gA.setOnAction(e -> {
             try {
                 int[] al = Arrays.stream(allowed.getText().split("[,\\s]+")).filter(s -> !s.isBlank()).mapToInt(Integer::parseInt).distinct().sorted().toArray();
-                run(new MarksBasedStrategy(Integer.parseInt(total.getText().trim()), al, topic.getText().trim()), title.getText(), subject.getText());
+                run(new MarksBasedStrategy(Integer.parseInt(total.getText().trim()), al, topic.getValue().equals("All topics") ? "" : topic.getValue()), title.getText(), subject.getText(), college.getText());
             } catch (NumberFormatException ex) { alert("Total and allowed marks must be whole numbers."); }
         });
         gB.setOnAction(e -> {
@@ -149,18 +237,18 @@ public class Main extends Application {
                 for (String line : bp.getText().split("\n")) {
                     if (line.isBlank()) continue; String[] p = line.split(",", -1);
                     secs.add(new BlueprintBasedStrategy.Section(p[0].trim(), Integer.parseInt(p[1].trim()), Integer.parseInt(p[2].trim()),
-                        p.length > 3 ? p[3].trim() : "", p.length > 4 && !p[4].isBlank() ? Difficulty.valueOf(p[4].trim().toUpperCase()) : null));
+                        p.length > 3 ? Topics.resolve(p[3].trim()) : "", p.length > 4 && !p[4].isBlank() ? Difficulty.valueOf(p[4].trim().toUpperCase()) : null));
                 }
-                run(new BlueprintBasedStrategy(secs, Integer.parseInt(declared.getText().trim())), title.getText(), subject.getText());
+                run(new BlueprintBasedStrategy(secs, Integer.parseInt(declared.getText().trim())), title.getText(), subject.getText(), college.getText());
             } catch (RuntimeException ex) { alert("Blueprint lines must look like: Section A,10,1[,topic[,EASY|MEDIUM|HARD]]"); }
         });
-        return page(new HBox(8, new Label("Title"), title, new Label("Subject"), subject),
+        return titled("Generate Paper", new HBox(8, new Label("College"), college, new Label("Title"), title, new Label("Subject"), subject),
             new Label("MODE A - total marks and allowed question marks"), new HBox(8, new Label("Total"), total, new Label("Allowed"), allowed, topic, gA),
-            new Label("MODE B - blueprint (one section per line: name,count,marksEach[,topic[,difficulty]])"), bp, new HBox(8, new Label("Declared total"), declared, gB));
+            new Label("MODE B - blueprint (one per line: name,count,marksEach[,topic number 1-60[,EASY|MEDIUM|HARD]])"), bp, new HBox(8, new Label("Declared total"), declared, gB));
     }
-    private void run(PaperGenerationStrategy s, String title, String subject) {
+    private void run(PaperGenerationStrategy s, String title, String subject, String college) {
         try {
-            current = new Paper(0, title, subject, s.modeName(), s.generate(new ArrayList<>(bank)));
+            current = new Paper(0, title, subject, s.modeName(), s.generate(new ArrayList<>(bank))); current.setCollege(college);
             refreshEditor(); tabs.getSelectionModel().select(3);
         } catch (GenerationException ex) { alert(ex.getMessage()); }
     }
@@ -174,7 +262,8 @@ public class Main extends Application {
             }
         });
         Button up = new Button("Up"), down = new Button("Down"), rem = new Button("Remove"), edit = new Button("Edit"), rep = new Button("Replace"),
-            man = new Button("Add manual"), save = new Button("Save paper"), prt = new Button("Print preview");
+            man = new Button("Add manual"), save = new Button("Save paper"), prt = new Button("Print preview"), hdr = new Button("Edit header");
+        hdr.setOnAction(e -> editHeader());
         up.setOnAction(e -> move(-1)); down.setOnAction(e -> move(1));
         rem.setOnAction(e -> { int i = editorList.getSelectionModel().getSelectedIndex(); if (current != null && i >= 0) { current.getQuestions().remove(i); refreshEditor(); } });
         edit.setOnAction(e -> editSelected());
@@ -197,7 +286,8 @@ public class Main extends Application {
         });
         prt.setOnAction(e -> { printPaper = current; tabs.getSelectionModel().select(5); updatePreview(); });
         VBox.setVgrow(editorList, Priority.ALWAYS);
-        return page(totalLbl, editorList, new HBox(8, up, down, edit, rep, rem, man, save, prt));
+        totalLbl.setMaxWidth(Double.MAX_VALUE); totalLbl.setAlignment(Pos.CENTER); totalLbl.getStyleClass().add("summary");
+        return titled("Paper Editor", totalLbl, editorList, new HBox(8, hdr, up, down, edit, rep, rem, man, save, prt));
     }
     private void refreshEditor() {
         if (current == null) { totalLbl.setText("No paper open."); editorList.getItems().clear(); return; }
@@ -248,16 +338,20 @@ public class Main extends Application {
         prt.setOnAction(e -> { Paper p = lv.getSelectionModel().getSelectedItem(); if (p != null) { printPaper = p; tabs.getSelectionModel().select(5); updatePreview(); } });
         del.setOnAction(e -> { Paper p = lv.getSelectionModel().getSelectedItem(); if (p != null && confirm("Delete this saved paper?")) { papers.remove(p); savePapers(); } });
         VBox.setVgrow(lv, Priority.ALWAYS);
-        return page(lv, new HBox(8, open, prt, del));
+        return titled("Saved Papers", lv, new HBox(8, open, prt, del));
     }
 
     /* ---------- Print preview (text, code and images) ---------- */
     private javafx.scene.Node printTab() {
         printKind.setValue("Question Paper"); printKind.setOnAction(e -> updatePreview());
-        pv.setPadding(new Insets(16)); pv.setStyle("-fx-background-color: white;");
-        ScrollPane sp = new ScrollPane(pv); sp.setFitToWidth(true); VBox.setVgrow(sp, Priority.ALWAYS);
+        pv.getStyleClass().add("paper"); pv.setMaxWidth(600); pv.setMinWidth(600);
+        StackPane holder = new StackPane(pv); holder.setPadding(new Insets(10)); StackPane.setAlignment(pv, Pos.TOP_CENTER);
+        ScrollPane sp = new ScrollPane(holder); sp.setFitToWidth(true); VBox.setVgrow(sp, Priority.ALWAYS);
         Button print = new Button("Print"); print.setOnAction(e -> doPrint());
-        return page(new HBox(8, printKind, print), sp);
+        return titled("Print Preview", new HBox(8, printKind, print), sp);
+    }
+    private Text head(String s, double w, int size) {
+        Text t = txt(s, w, true); t.setFont(Font.font("SansSerif", FontWeight.BOLD, size)); t.setTextAlignment(TextAlignment.CENTER); return t;
     }
     private Text txt(String s, double w, boolean bold) {
         Text t = new Text(s); t.setFont(Font.font("Monospaced", bold ? FontWeight.BOLD : FontWeight.NORMAL, 11)); t.setWrappingWidth(w); return t;
@@ -272,8 +366,8 @@ public class Main extends Application {
     /** Builds the printable content as separate nodes so the preview and the printout are identical. */
     private List<javafx.scene.Node> items(double w) {
         List<javafx.scene.Node> out = new ArrayList<>(); Paper p = printPaper; String kind = printKind.getValue();
-        if (!p.getCollege().isBlank()) out.add(txt(p.getCollege(), w, true));
-        out.add(txt(p.getTitle() + "\n" + p.getSubject(), w, true));
+        if (!p.getCollege().isBlank()) out.add(head(p.getCollege(), w, 17));
+        out.add(head(p.getTitle(), w, 14)); out.add(head(p.getSubject(), w, 13));
         if (kind.equals("Blueprint")) {
             StringBuilder sb = new StringBuilder("BLUEPRINT\n\nSection | Topic | Difficulty | Questions | Marks each | Total\n");
             Map<String, List<PaperQuestion>> g = new LinkedHashMap<>();
@@ -286,7 +380,12 @@ public class Main extends Application {
             out.add(txt(sb.toString(), w, false)); return out;
         }
         boolean key = kind.equals("Answer Key");
-        out.add(txt(key ? "ANSWER KEY" : "Total Marks: " + p.getTotalMarks(), w, true)); String sec = ""; int n = 0;
+        if (key) out.add(head("ANSWER KEY", w, 13));
+        else {
+            Text tm = txt("Time: " + (p.getDuration().isBlank() ? "________" : p.getDuration()) + "        Total Marks: " + p.getTotalMarks(), w, true); tm.setTextAlignment(TextAlignment.CENTER); out.add(tm);
+            if (!p.getInstructions().isBlank()) out.add(txt("Instructions: " + p.getInstructions(), w, false));
+        }
+        String sec = ""; int n = 0;
         for (PaperQuestion q : p.getQuestions()) {
             if (!q.getSectionName().equals(sec)) { sec = q.getSectionName(); out.add(txt("\n== " + sec + " ==", w, true)); }
             out.add(txt(++n + ". " + (key ? q.getAnswerContent() : q.getQuestionContent()) + "  [" + q.getMarks() + "]", w, false));

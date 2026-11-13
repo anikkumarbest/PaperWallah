@@ -4,6 +4,8 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 /** All file I/O lives here: object serialization + image copying. */
 public class StorageService {
     private final Path data = Paths.get("PaperWallah", "data"), images = Paths.get("PaperWallah", "images");
@@ -21,11 +23,19 @@ public class StorageService {
     public List<Paper> loadPapers() { return read("papers.dat"); }
     public void saveQuestions(List<Question> q) throws IOException { write("questions.dat", q); }
     public void savePapers(List<Paper> p) throws IOException { write("papers.dat", p); }
-    /** Copies an image into PaperWallah/images and returns the relative path to store. */
+    private static final Set<String> EXT = Set.of("png", "jpg", "jpeg", "gif", "bmp");
+    /** Copies an image into PaperWallah/images under a unique generated name, so equal file names never clash. */
     public String importImage(File src) throws IOException {
-        Path dest = images.resolve(System.currentTimeMillis() + "_" + src.getName());
-        Files.copy(src.toPath(), dest, StandardCopyOption.REPLACE_EXISTING);
-        return dest.toString();
+        String n = src.getName(); int dot = n.lastIndexOf('.'); String ext = dot >= 0 ? n.substring(dot + 1).toLowerCase() : "";
+        if (!EXT.contains(ext)) throw new IOException("Unsupported image type. Use PNG, JPG, GIF or BMP.");
+        String base = (dot > 0 ? n.substring(0, dot) : "image").replaceAll("[^A-Za-z0-9_-]", "_");
+        if (base.length() > 30) base = base.substring(0, 30);
+        for (int i = 0; i < 5; i++) {
+            Path dest = images.resolve(base + "_" + UUID.randomUUID().toString().substring(0, 8) + "." + ext);
+            if (!Files.exists(dest)) { Files.copy(src.toPath(), dest); return dest.toString(); }
+        }
+        throw new IOException("Could not create a unique image name.");
     }
+    public void deleteImage(String rel) { try { Files.deleteIfExists(Paths.get(rel)); } catch (IOException e) { System.err.println(e); } }
     public boolean imageExists(String rel) { return Files.exists(Paths.get(rel)); }
 }
