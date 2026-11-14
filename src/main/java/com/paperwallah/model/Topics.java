@@ -1,9 +1,9 @@
 package com.paperwallah.model;
 import java.util.List;
-/** The fixed list of 60 syllabus topics. Topic is always chosen from this list. */
+/** The 60 starting syllabus topics. Teachers can add or remove topics; the live list is stored in topics.txt. */
 public final class Topics {
     private Topics() {}
-    public static final List<String> ALL = List.of(
+    public static final List<String> DEFAULT = List.of(
 "Object-Oriented Programming Paradigm and Principles","Classes, Objects and Object Instantiation","Constructors and Constructor Chaining",
 "Instance Variables, Static Variables and Methods","Encapsulation, Abstraction and Modularity","Class Relationships (Association, Aggregation, Composition, Dependency)",
 "Inheritance and Types of Inheritance","Polymorphism (Compile-time and Runtime)","Method Overloading and Overriding","Dynamic Method Dispatch, Upcasting and Downcasting",
@@ -23,9 +23,4 @@ public final class Topics {
 "Structural Patterns (Adapter, Flyweight, Facade, Decorator, Composite, Proxy)","Behavioural Patterns (Strategy, Template Method, Chain of Responsibility, Observer, State)",
 "JVM, JRE, JDK and Garbage Collection","Lambda Expressions, Functional Interfaces and Method References","Stream API and Optional Class",
 "SOLID Principles and Dependency Injection","JDBC and Database Connectivity");
-    /** Accepts a topic number (1-60) or a full topic name. */
-    public static String resolve(String s) {
-        try { int i = Integer.parseInt(s.trim()); if (i >= 1 && i <= ALL.size()) return ALL.get(i - 1); } catch (NumberFormatException e) { }
-        return s;
-    }
 }

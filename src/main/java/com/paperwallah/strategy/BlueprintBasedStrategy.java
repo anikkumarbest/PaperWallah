@@ -3,8 +3,8 @@ import com.paperwallah.model.*;
 import java.util.*;
 import java.util.stream.Collectors;
 public class BlueprintBasedStrategy implements PaperGenerationStrategy {
-    /** One blueprint row. topic empty = any; difficulty null = any. */
-    public record Section(String name, int count, int marks, String topic, Difficulty difficulty) {}
+    /** One blueprint row. topics empty = any topic; difficulty null = any. */
+    public record Section(String name, int count, int marks, Set<String> topics, Difficulty difficulty) {}
     private final List<Section> sections; private final int declaredTotal;
     public BlueprintBasedStrategy(List<Section> s, int declaredTotal) { sections = s; this.declaredTotal = declaredTotal; }
     public String modeName() { return "Blueprint"; }
@@ -14,9 +14,9 @@ public class BlueprintBasedStrategy implements PaperGenerationStrategy {
         Set<Integer> used = new HashSet<>(); List<PaperQuestion> out = new ArrayList<>(); List<String> missing = new ArrayList<>();
         for (Section s : sections) {
             List<Question> p = bank.stream().filter(q -> q.getMarks() == s.marks() && !used.contains(q.getQuestionId())
-                && (s.topic() == null || s.topic().isBlank() || q.getTopic().equalsIgnoreCase(s.topic()))
+                && (s.topics() == null || s.topics().isEmpty() || s.topics().contains(q.getTopic()))
                 && (s.difficulty() == null || q.getDifficulty() == s.difficulty())).collect(Collectors.toList());
-            if (p.size() < s.count()) { missing.add(s.name() + ": need " + s.count() + ", found " + p.size()); continue; }
+            if (p.size() < s.count()) { missing.add(s.name() + ": need " + s.count() + ", found " + p.size() + " matching (" + s.marks() + " marks)"); continue; }
             Collections.shuffle(p);
             for (int k = 0; k < s.count(); k++) { used.add(p.get(k).getQuestionId()); out.add(new PaperQuestion(p.get(k), s.name())); }
         }

@@ -29,6 +29,7 @@ public class PaperQuestion implements Serializable {
     public String getTopic() { return topic; }
     public Difficulty getDifficulty() { return difficulty; }
     public String getSectionName() { return sectionName; }
+    public void setSectionName(String s) { sectionName = s; }
     public List<String> getImagePaths() { return imagePaths; }
     public Question toQuestion(int newId) {
         Question q = new Question(newId, questionContent, answerContent, marks, difficulty, topic);

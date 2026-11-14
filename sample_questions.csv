@@ -1,7 +1,0 @@
-marks,difficulty,topic,question,answer
-1,easy,1,"Which paradigm models software as interacting objects?\nA) Procedural\nB) Object-oriented\nC) Functional\nD) Logic",B
-1,medium,3,"Which keyword calls another constructor of the same class?\nA) super\nB) this\nC) new\nD) static",B
-3,easy,7,"Name three types of inheritance in Java.","Single, multilevel and hierarchical (multiple inheritance of classes is not allowed)."
-3,medium,22,"Differentiate between checked and unchecked exceptions.","Checked exceptions are verified at compile time; unchecked (RuntimeException) are not."
-5,hard,28,"Explain the internal working of HashMap.","Hashing finds a bucket by hash code; collisions use linked lists/trees; resizing at load factor 0.75."
-5,medium,53,"Write a thread-safe Singleton class.","public class S {\n    private static final S I = new S();\n    private S() {}\n    public static S get() { return I; }\n}"

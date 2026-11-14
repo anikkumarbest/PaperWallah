@@ -27,3 +27,23 @@
 .scroll-pane,.scroll-pane > .viewport{-fx-background-color:transparent;}
 .dialog-pane{-fx-background-color:#eef0fb;}
 .paper{-fx-background-color:white;-fx-effect:dropshadow(gaussian,#00000040,14,0.1,0,4);-fx-padding:24;}
+.chip{-fx-background-color:#e8eaf6;-fx-text-fill:#283593;-fx-background-radius:12;-fx-padding:2 10 2 10;-fx-font-size:11px;-fx-font-weight:bold;}
+.chip-marks{-fx-background-color:#3f51b5;-fx-text-fill:white;}
+.chip-easy{-fx-background-color:#c8e6c9;-fx-text-fill:#1b5e20;}
+.chip-medium{-fx-background-color:#ffe0b2;-fx-text-fill:#e65100;}
+.chip-hard{-fx-background-color:#ffcdd2;-fx-text-fill:#b71c1c;}
+.qcard{-fx-background-color:white;-fx-background-radius:12;-fx-padding:12;-fx-border-color:#d6daf0;-fx-border-radius:12;-fx-effect:dropshadow(gaussian,#00000020,8,0.1,0,2);}
+.qcard:hover{-fx-border-color:#3f51b5;}
+.q-list,.q-list:focused{-fx-background-color:transparent;-fx-border-color:transparent;}
+.q-list .list-cell{-fx-background-color:transparent;-fx-padding:4 6 4 6;}
+.q-list .list-cell:selected .qcard{-fx-border-color:#3f51b5;-fx-border-width:2;-fx-background-color:#f3f5ff;}
+.sec-head{-fx-font-size:15px;-fx-font-weight:bold;-fx-text-fill:white;-fx-background-color:#5c6bc0;-fx-background-radius:8;-fx-padding:6 14 6 14;}
+.detail{-fx-background-color:white;-fx-background-radius:14;-fx-padding:16;-fx-effect:dropshadow(gaussian,#00000030,12,0.1,0,3);}
+.navcard{-fx-background-color:white;-fx-background-radius:16;-fx-padding:26 30 26 30;-fx-alignment:center;-fx-cursor:hand;-fx-effect:dropshadow(gaussian,#00000030,12,0.1,0,3);}
+.navcard:hover{-fx-scale-x:1.06;-fx-scale-y:1.06;-fx-background-color:#e8eaf6;-fx-effect:dropshadow(gaussian,#3f51b5aa,18,0.2,0,4);}
+.navcard .label{-fx-text-fill:#283593;}
+.navtitle{-fx-font-size:18px;-fx-font-weight:bold;}
+.button.ghost{-fx-background-color:white;-fx-text-fill:#283593;-fx-border-color:#9fa8da;-fx-border-radius:8;}
+.button.ghost:hover{-fx-background-color:#e8eaf6;}
+.button.danger{-fx-background-color:#d32f2f;}
+.button.danger:hover{-fx-background-color:#b71c1c;}

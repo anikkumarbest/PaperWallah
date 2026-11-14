@@ -3,8 +3,8 @@ import com.paperwallah.model.*;
 import java.util.*;
 import java.util.stream.Collectors;
 public class MarksBasedStrategy implements PaperGenerationStrategy {
-    private final int total; private final int[] allowed; private final String topic; // topic may be null
-    public MarksBasedStrategy(int total, int[] allowed, String topic) { this.total = total; this.allowed = allowed; this.topic = topic; }
+    private final int total; private final int[] allowed; private final Set<String> topics; // null or empty = all topics
+    public MarksBasedStrategy(int total, int[] allowed, Set<String> topics) { this.total = total; this.allowed = allowed; this.topics = topics; }
     public String modeName() { return "Marks-based"; }
 
     /** All non-negative count combinations whose weighted sum equals total. */
@@ -23,7 +23,7 @@ public class MarksBasedStrategy implements PaperGenerationStrategy {
         List<int[]> all = combinations(total, allowed);
         if (all.isEmpty()) throw new GenerationException("No exact combination of the allowed marks adds up to " + total + ".");
         all.sort(Comparator.comparingInt(MarksBasedStrategy::spread).thenComparingInt(MarksBasedStrategy::sum));
-        List<Question> pool = bank.stream().filter(q -> topic == null || topic.isBlank() || q.getTopic().equalsIgnoreCase(topic)).collect(Collectors.toList());
+        List<Question> pool = bank.stream().filter(q -> topics == null || topics.isEmpty() || topics.contains(q.getTopic())).collect(Collectors.toList());
         int[] have = new int[allowed.length];
         for (int i = 0; i < allowed.length; i++) { final int m = allowed[i]; have[i] = (int) pool.stream().filter(q -> q.getMarks() == m).count(); }
         int[] pick = null;

@@ -22,7 +22,7 @@ class PaperGeneratorTest {
     @Test void noValidCombination() { assertThrows(GenerationException.class, () -> new MarksBasedStrategy(7, new int[]{4, 6}, null).generate(bank(10))); }
     @Test void insufficientQuestions() { assertThrows(GenerationException.class, () -> new MarksBasedStrategy(50, new int[]{1, 3, 5}, null).generate(bank(1))); }
     @Test void blueprintTotalMismatch() {
-        var s = List.of(new BlueprintBasedStrategy.Section("A", 2, 1, "", null));
+        var s = List.of(new BlueprintBasedStrategy.Section("A", 2, 1, Set.of(), null));
         assertThrows(GenerationException.class, () -> new BlueprintBasedStrategy(s, 5).generate(bank(5)));
     }
     @Test void correctKeepsIdCreateNewDoesNot() {
