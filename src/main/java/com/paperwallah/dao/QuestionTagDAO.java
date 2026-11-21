@@ -35,6 +35,12 @@ public class QuestionTagDAO {
         try (PreparedStatement d = db.conn().prepareStatement("DELETE FROM question_tag_exclusions WHERE question_id=?")) { d.setInt(1, qid); d.executeUpdate(); }
         try (PreparedStatement i = db.conn().prepareStatement("INSERT OR IGNORE INTO question_tag_exclusions(question_id,tag_id) VALUES(?,?)")) { for (int t : tagIds) { i.setInt(1, qid); i.setInt(2, t); i.addBatch(); } i.executeBatch(); }
     }
+    /** question id -> names of all its tags (auto and manual), loaded in one query for the related-question index. */
+    public Map<Integer, Set<String>> allNames() throws SQLException {
+        Map<Integer, Set<String>> m = new HashMap<>();
+        try (Statement s = db.conn().createStatement(); ResultSet r = s.executeQuery("SELECT qt.question_id,t.name FROM question_tags qt JOIN tags t ON t.id=qt.tag_id")) { while (r.next()) m.computeIfAbsent(r.getInt(1), k -> new LinkedHashSet<>()).add(r.getString(2)); }
+        return m;
+    }
     public Map<Integer, Integer> questionCounts() throws SQLException {
         Map<Integer, Integer> m = new HashMap<>();
         try (Statement s = db.conn().createStatement(); ResultSet r = s.executeQuery("SELECT tag_id,COUNT(*) FROM question_tags GROUP BY tag_id")) { while (r.next()) m.put(r.getInt(1), r.getInt(2)); }

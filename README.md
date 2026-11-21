@@ -68,6 +68,25 @@ Every question gets **tags** automatically, using rules you can edit. Nothing ne
 - **Tags tab:** create, rename, merge and delete tags (with an optional group such as "Data Structures"), add trigger phrases with a match type and priority, switch rules on or off, preview which questions a rule would match, keep an ignore list for ambiguous words, and **Re-tag question bank** (runs with a progress window).
 - **Starter rules** for about 28 common computing tags are added on first run. They are only a starting point; edit or delete them, and add your own for any subject.
 
+## Related questions (Phase 3)
+
+When you view or edit a question, or work in the Paper Editor, PaperWallah suggests related questions. It is fully offline and uses a **transparent score, not AI**:
+
+| Signal | Default points | How it is measured |
+|---|---|---|
+| Shared tags | up to 50 | overlap of the two questions' tags |
+| Same topic | 20 | exact topic match |
+| Shared keywords | up to 15 | the question's most important words that also appear in the other question |
+| Similar wording | up to 10 | TF-IDF cosine similarity of question + answer text |
+| Same Bloom level | up to 5 | not used yet (arrives with Bloom metadata in Phase 4) |
+
+Penalties apply when marks are very different or when you marked the suggestion "Not related". The result is shown as **Match score** with a "Why" line for every suggestion. The weights can be changed with **Score settings** in the Related Questions window.
+
+- **Where:** a short panel in the Question Bank details, a **Show related questions** button in the Add/Edit window (works on unsaved text), and a **Related** button on every question card in the Paper Editor.
+- **Modes:** same concept, alternative wording, easier version, harder version, and same topic with different tags.
+- **Actions:** View, Compare side by side, Add to current paper, Replace selected (from the Paper Editor), Not related (lowers the score) and Hide (never suggest it for this question again).
+- **Duplicates** (identical wording or 97%+ similar) are listed separately and never recommended as alternatives. The question itself and questions already in the paper are left out.
+
 ## Quick start guide
 
 1. **Question Bank** – browse the starting questions, or press **Add question** to create your own.
@@ -150,6 +169,7 @@ PaperWallah/
 - no valid combination (for example 7 marks using only 4- and 6-mark questions)
 - not enough questions in the bank
 - blueprint total mismatch
+- related questions: weighted scoring and explanations, configurable weights, duplicates, difficulty modes, feedback, TF-IDF cosine
 - tagging: whole-word matching, phrases, prefix, priority and longest-phrase conflicts, question and answer both analysed, manual tags and exclusions surviving re-tagging, disabled rules, merge, starter rules
 - "correct existing" keeps the question ID, while "create new" leaves the original unchanged
 - a paper's copy stays unchanged when the bank question is edited later

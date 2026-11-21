@@ -18,7 +18,9 @@ class DatabaseMigrator {
         "CREATE TABLE tag_rules(id INTEGER PRIMARY KEY AUTOINCREMENT, keyword_or_phrase TEXT NOT NULL, normalized_phrase TEXT NOT NULL UNIQUE, tag_id INTEGER NOT NULL, match_mode TEXT NOT NULL, is_enabled INTEGER NOT NULL DEFAULT 1, priority INTEGER NOT NULL DEFAULT 0, FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE)",
         "CREATE TABLE question_tag_exclusions(question_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY(question_id, tag_id), FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE, FOREIGN KEY(tag_id) REFERENCES tags(id) ON DELETE CASCADE)",
         "CREATE INDEX idx_qt_tag ON question_tags(tag_id)", "CREATE INDEX idx_qt_question ON question_tags(question_id)",
-        "CREATE INDEX idx_rules_phrase ON tag_rules(normalized_phrase, is_enabled)"));
+        "CREATE INDEX idx_rules_phrase ON tag_rules(normalized_phrase, is_enabled)"),
+      List.of( // version 3: related-question feedback
+        "CREATE TABLE related_feedback(question_id INTEGER NOT NULL, other_question_id INTEGER NOT NULL, feedback TEXT NOT NULL, created_at TEXT, PRIMARY KEY(question_id, other_question_id), FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE, FOREIGN KEY(other_question_id) REFERENCES questions(id) ON DELETE CASCADE)"));
     private final DatabaseManager db;
     DatabaseMigrator(DatabaseManager db) { this.db = db; }
     void migrate() throws SQLException {

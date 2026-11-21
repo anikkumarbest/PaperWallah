@@ -38,6 +38,7 @@ public class Main extends Application {
     private String firstReport;
     private TextArea dbInfo;
     private TaggingService tagSvc;
+    private RelatedQuestionService relatedSvc;
     private ListView<Tag> tagList; private TableView<TagRule> ruleTable; private Map<Integer, Integer> tagCounts = new HashMap<>();
     private final ObservableList<Question> bank = FXCollections.observableArrayList();
     private final ObservableList<String> topics = FXCollections.observableArrayList();
@@ -57,7 +58,7 @@ public class Main extends Application {
     private static final Border BLACK = new Border(new BorderStroke(Color.BLACK, BorderStrokeStyle.SOLID, CornerRadii.EMPTY, new BorderWidths(1.5)));
     private static final ObservableList<Integer> MARKS = FXCollections.observableArrayList(1, 2, 3, 4, 5, 6);
 
-    static class Draft { boolean tagsEnabled; Set<String> manualTags = new LinkedHashSet<>(), excludedTags = new LinkedHashSet<>(); String q = "", a = "", topic = "", section = "Section A"; int marks = 1; Difficulty d = Difficulty.MEDIUM; List<String> imgs = new ArrayList<>(); }
+    static class Draft { int id; boolean tagsEnabled; Set<String> manualTags = new LinkedHashSet<>(), excludedTags = new LinkedHashSet<>(); String q = "", a = "", topic = "", section = "Section A"; int marks = 1; Difficulty d = Difficulty.MEDIUM; List<String> imgs = new ArrayList<>(); }
 
     /** One editable blueprint section (Mode B). */
     private class Row {
@@ -106,11 +107,13 @@ public class Main extends Application {
         reloadAll();
         tagSvc = new TaggingService(db);
         if (tagSvc.seedStarterIfNeeded()) tagSvc.retag(new ArrayList<>(bank), null);
+        relatedSvc = new RelatedQuestionService(db, tagSvc);
     }
     private void reloadAll() throws SQLException { topics.setAll(topicSvc.load()); bank.setAll(questionSvc.loadAll()); papers.setAll(paperSvc.loadAll()); }
     /** On a failed save the in-memory lists are reloaded from the database so screen and data never disagree. */
     private void failed(String what, SQLException e) { alert("Could not save " + what + ": " + e.getMessage()); try { reloadAll(); } catch (SQLException ex) { alert("Could not reload data: " + ex.getMessage()); } }
-    private void saveBank() { try { questionSvc.sync(bank); } catch (SQLException e) { failed("questions", e); } }
+    private void invalidateRelated() { if (relatedSvc != null) relatedSvc.invalidate(); }
+    private void saveBank() { invalidateRelated(); try { questionSvc.sync(bank); } catch (SQLException e) { failed("questions", e); } }
     private void saveTopics() { try { topicSvc.sync(topics); } catch (SQLException e) { failed("topics", e); } }
     private void savePapers() { try { paperSvc.sync(papers); } catch (SQLException e) { failed("papers", e); } }
     private void refreshDash() { sQ.setText("" + bank.size()); sT.setText("" + topics.size()); sP.setText("" + papers.size()); refreshDb(); }
@@ -223,7 +226,16 @@ public class Main extends Application {
         VBox box = new VBox(8, new Label("Question (code: indentation is kept; MCQ: write A) B) C) D) lines)"), q, new Label("Answer / correct option"), a,
             new HBox(10, new Label("Marks"), m, new Label("Difficulty"), df), new Label("Topic"), t);
         if (secF != null) box.getChildren().addAll(new Label("Section (pick one or type a new name)"), secF);
-        if (d.tagsEnabled) box.getChildren().add(tagPanel(d, q, a));
+        if (d.tagsEnabled) {
+            box.getChildren().add(tagPanel(d, q, a));
+            Button rel = new Button("Show related questions"); rel.getStyleClass().add("ghost");
+            rel.setOnAction(e -> {
+                if (q.getText().isBlank()) { alert("Write the question first."); return; }
+                try { showRelated("Related to this question", relatedSvc.forText(d.id, q.getText(), a.getText(), t.getValue(), m.getValue(), df.getValue(), d.manualTags, d.excludedTags), d.id == 0 ? Set.of() : Set.of(d.id), null, null); }
+                catch (SQLException ex) { alert("Could not find related questions: " + ex.getMessage()); }
+            });
+            box.getChildren().add(rel);
+        }
         box.getChildren().addAll(att, thumbs);
         ScrollPane sp = new ScrollPane(box); sp.setFitToWidth(true); sp.setPrefSize(680, 600); box.setPadding(new Insets(8));
         dlg.getDialogPane().setContent(sp); dlg.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
@@ -251,7 +263,7 @@ public class Main extends Application {
         for (Text t : List.of(qt, at)) { t.setFont(Font.font("Monospaced", 13)); t.setWrappingWidth(420); }
         box.getChildren().addAll(new HBox(6, chip("#" + q.getQuestionId(), null), chip(q.getMarks() + " marks", "chip-marks"), diffChip(q.getDifficulty())), chip(q.getTopic(), null), qh, qt);
         for (String p : q.getImagePaths()) box.getChildren().add(bigImg(p, 420));
-        box.getChildren().addAll(new Separator(), ah, at, tagRow(q));
+        box.getChildren().addAll(new Separator(), ah, at, tagRow(q), relatedPreview(q));
     }
     private javafx.scene.Node bankTab() {
         FilteredList<Question> shown = new FilteredList<>(bank, x -> true);
@@ -274,7 +286,7 @@ public class Main extends Application {
         add.setOnAction(e -> { Draft d = new Draft(); d.tagsEnabled = true; if (form("Add question", d, null)) { Question q = new Question(editSvc.nextId(), d.q, d.a, d.marks, d.d, d.topic); q.getImagePaths().addAll(d.imgs); bank.add(q); saveBank(); applyTags(q, d); refreshDash(); lv.getSelectionModel().select(q); lv.scrollTo(q); } });
         edit.setOnAction(e -> {
             Question q = lv.getSelectionModel().getSelectedItem(); if (q == null) { alert("Select a question first."); return; }
-            Draft d = new Draft(); d.tagsEnabled = true; loadUserTags(q, d); d.q = q.getQuestionContent(); d.a = q.getAnswerContent(); d.topic = q.getTopic(); d.marks = q.getMarks(); d.d = q.getDifficulty(); d.imgs = new ArrayList<>(q.getImagePaths());
+            Draft d = new Draft(); d.tagsEnabled = true; d.id = q.getQuestionId(); loadUserTags(q, d); d.q = q.getQuestionContent(); d.a = q.getAnswerContent(); d.topic = q.getTopic(); d.marks = q.getMarks(); d.d = q.getDifficulty(); d.imgs = new ArrayList<>(q.getImagePaths());
             if (form("Edit question #" + q.getQuestionId(), d, null)) {
                 q.setQuestionContent(d.q); q.setAnswerContent(d.a); q.setTopic(d.topic); q.setMarks(d.marks); q.setDifficulty(d.d);
                 q.getImagePaths().clear(); q.getImagePaths().addAll(d.imgs); saveBank(); applyTags(q, d); lv.refresh(); showDetail(detail, q);
@@ -384,10 +396,10 @@ public class Main extends Application {
         HBox chips = new HBox(6, chip("Q" + (i + 1), null), chip(q.getMarks() + (q.getMarks() == 1 ? " mark" : " marks"), "chip-marks"), diffChip(q.getDifficulty()), chip(shorten(q.getTopic(), 40), null));
         Label body = new Label(shorten(q.getQuestionContent().strip(), 320)); body.setWrapText(true); body.setFont(Font.font("Monospaced", 13));
         HBox imgs = new HBox(6); for (String p : q.getImagePaths()) imgs.getChildren().add(thumb(p, 48));
-        Button up = new Button("▲ Up"), dn = new Button("▼ Down"), ed = new Button("Edit"), rp = new Button("Replace"), rm = new Button("Remove"); rm.getStyleClass().add("danger");
-        up.setOnAction(e -> move(i, -1)); dn.setOnAction(e -> move(i, 1)); ed.setOnAction(e -> editQuestion(i)); rp.setOnAction(e -> replaceQuestion(i));
+        Button up = new Button("▲ Up"), dn = new Button("▼ Down"), ed = new Button("Edit"), rp = new Button("Replace"), rl = new Button("Related"), rm = new Button("Remove"); rm.getStyleClass().add("danger");
+        up.setOnAction(e -> move(i, -1)); dn.setOnAction(e -> move(i, 1)); ed.setOnAction(e -> editQuestion(i)); rp.setOnAction(e -> replaceQuestion(i)); rl.setOnAction(e -> relatedForPaperQuestion(i));
         rm.setOnAction(e -> { if (confirm("Remove this question from the paper?")) { current.getQuestions().remove(i); refreshEditor(); } });
-        HBox bt = new HBox(8, up, dn, ed, rp, rm); bt.setAlignment(Pos.CENTER_RIGHT);
+        HBox bt = new HBox(8, up, dn, ed, rp, rl, rm); bt.setAlignment(Pos.CENTER_RIGHT);
         VBox c = new VBox(8, chips, body); if (!imgs.getChildren().isEmpty()) c.getChildren().add(imgs); c.getChildren().add(bt); c.getStyleClass().add("qcard"); return c;
     }
     /** Slides the two neighbouring cards past each other, then commits the swap. */
@@ -538,14 +550,107 @@ public class Main extends Application {
         }
         job.endJob();
     }
+    /* ---------- Related questions ---------- */
+    private void addToCurrent(Question q) {
+        if (current == null) { alert("Open or generate a paper first, then add the question."); return; }
+        List<PaperQuestion> l = current.getQuestions(); l.add(new PaperQuestion(q, l.isEmpty() ? "Section A" : l.get(l.size() - 1).getSectionName())); refreshEditor();
+    }
+    private javafx.scene.Node relatedPreview(Question q) {
+        Label h = new Label("RELATED QUESTIONS"); h.getStyleClass().add("summary"); VBox v = new VBox(6, h);
+        try {
+            RelatedProbe p = relatedSvc.forQuestion(q); RelatedResult r = relatedSvc.suggest(p, RelatedMode.SAME_CONCEPT, Set.of(q.getQuestionId()), 3);
+            if (r.related().isEmpty()) v.getChildren().add(new Label("No related questions found yet."));
+            for (RelatedSuggestion s : r.related()) { Label l = new Label("#" + s.question().getQuestionId() + "  " + shorten(s.question().getQuestionContent().replace("\n", " "), 55)); l.setWrapText(true); l.setMaxWidth(300); v.getChildren().add(new HBox(8, chip("Match " + Math.round(s.score()), "chip-marks"), l)); }
+            if (!r.duplicates().isEmpty()) v.getChildren().add(new Label(r.duplicates().size() + " possible duplicate(s) found"));
+            Button more = new Button("Show all related..."); more.getStyleClass().add("ghost"); more.setOnAction(e -> showRelated("Related to question #" + q.getQuestionId(), p, Set.of(q.getQuestionId()), this::addToCurrent, null)); v.getChildren().add(more);
+        } catch (SQLException e) { v.getChildren().add(new Label("Related questions unavailable")); }
+        return v;
+    }
+    private void relatedForPaperQuestion(int i) {
+        PaperQuestion pq = current.getQuestions().get(i); Integer oid = pq.getOriginalQuestionId(); Set<String> manual = new LinkedHashSet<>(), excl = new LinkedHashSet<>();
+        try {
+            if (oid != null) { for (QuestionTagInfo t : tagSvc.tagsOf(oid)) if (t.source().equals("MANUAL")) manual.add(t.name()); excl.addAll(tagSvc.excludedNames(oid)); }
+            RelatedProbe p = relatedSvc.forText(oid == null ? 0 : oid, pq.getQuestionContent(), pq.getAnswerContent(), pq.getTopic(), pq.getMarks(), pq.getDifficulty(), manual, excl);
+            Set<Integer> inPaper = current.getQuestions().stream().map(PaperQuestion::getOriginalQuestionId).filter(Objects::nonNull).collect(Collectors.toSet());
+            showRelated("Related to question " + (i + 1) + " of the paper", p, inPaper, this::addToCurrent, q -> { current.getQuestions().set(i, new PaperQuestion(q, pq.getSectionName())); refreshEditor(); });
+        } catch (SQLException e) { alert("Could not find related questions: " + e.getMessage()); }
+    }
+    private void viewQuestion(Question q) {
+        VBox box = new VBox(10); box.getStyleClass().add("detail"); box.setPadding(new Insets(16)); showDetail(box, q);
+        Dialog<ButtonType> d = new Dialog<>(); d.setTitle("Question #" + q.getQuestionId()); style(d); ScrollPane sp = new ScrollPane(box); sp.setFitToWidth(true); sp.setPrefSize(520, 520);
+        d.getDialogPane().setContent(sp); d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); d.showAndWait();
+    }
+    private void compareDialog(RelatedProbe p, Question o) {
+        VBox left = compareColumn("This question", p.text(), p.answer(), p.marks() + " marks", p.difficulty().name(), p.topic(), p.tags());
+        VBox right = compareColumn("Suggestion #" + o.getQuestionId(), o.getQuestionContent(), o.getAnswerContent(), o.getMarks() + " marks", o.getDifficulty().name(), o.getTopic(), Set.of());
+        HBox h = new HBox(16, left, right); HBox.setHgrow(left, Priority.ALWAYS); HBox.setHgrow(right, Priority.ALWAYS);
+        Dialog<ButtonType> d = new Dialog<>(); d.setTitle("Compare side by side"); style(d); d.setResizable(true); ScrollPane sp = new ScrollPane(h); sp.setFitToWidth(true); sp.setPrefSize(860, 520);
+        d.getDialogPane().setContent(sp); d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); d.showAndWait();
+    }
+    private VBox compareColumn(String title, String q, String a, String marks, String diff, String topic, Set<String> tags) {
+        Label t = new Label(title); t.getStyleClass().add("summary"); Text qt = new Text(q), at = new Text(a);
+        for (Text x : List.of(qt, at)) { x.setFont(Font.font("Monospaced", 13)); x.setWrappingWidth(380); }
+        HBox chips = new HBox(6, chip(marks, "chip-marks"), chip(diff, null), chip(shorten(topic, 28), null)); FlowPane tg = new FlowPane(6, 6); tags.forEach(x -> tg.getChildren().add(chip(x, "chip-auto")));
+        VBox v = new VBox(8, t, chips, tg, new Label("QUESTION"), qt, new Separator(), new Label("ANSWER"), at); v.getStyleClass().add("detail"); v.setPadding(new Insets(14)); return v;
+    }
+    private void weightsDialog() {
+        try {
+            RelatedWeights w = relatedSvc.weights(); String[] names = {"Shared tags (max points)", "Same topic", "Shared keywords", "Text similarity", "Same Bloom level (Phase 4)", "Marks very different (penalty)", "Marked unrelated (penalty)", "Hide suggestions below"};
+            double[] vals = {w.tags(), w.topic(), w.keywords(), w.text(), w.bloom(), w.marksPenalty(), w.unrelatedPenalty(), w.minScore()};
+            Dialog<ButtonType> d = new Dialog<>(); d.setTitle("Match score settings"); style(d); GridPane g = new GridPane(); g.setHgap(10); g.setVgap(8); g.setPadding(new Insets(12)); List<Spinner<Double>> sp = new ArrayList<>();
+            for (int k = 0; k < names.length; k++) { Spinner<Double> s2 = new Spinner<>(0.0, 100.0, vals[k], 1.0); s2.setEditable(true); sp.add(s2); g.add(new Label(names[k]), 0, k); g.add(s2, 1, k); }
+            d.getDialogPane().setContent(new VBox(8, g, new Label("The Match score is a transparent weighted sum of these points (default total 100). It is not an AI probability."))); d.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+            if (d.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) { sp.forEach(x -> x.increment(0)); relatedSvc.setWeights(new RelatedWeights(sp.get(0).getValue(), sp.get(1).getValue(), sp.get(2).getValue(), sp.get(3).getValue(), sp.get(4).getValue(), sp.get(5).getValue(), sp.get(6).getValue(), sp.get(7).getValue())); }
+        } catch (SQLException e) { alert("Could not read or save the settings: " + e.getMessage()); }
+    }
+    /** The Related Questions panel. onAdd / onReplace may be null when the action does not apply. */
+    private void showRelated(String title, RelatedProbe probe, Set<Integer> exclude, java.util.function.Consumer<Question> onAdd, java.util.function.Consumer<Question> onReplace) {
+        Set<Integer> ex = new HashSet<>(exclude); Dialog<ButtonType> d = new Dialog<>(); d.setTitle("Related questions"); style(d); d.setResizable(true);
+        ChoiceBox<RelatedMode> mode = new ChoiceBox<>(FXCollections.observableArrayList(RelatedMode.values())); mode.setValue(RelatedMode.SAME_CONCEPT);
+        Button gear = new Button("Score settings"); gear.getStyleClass().add("ghost");
+        Label head = new Label(title); head.getStyleClass().add("summary"); Label note = new Label("Match score = transparent weighted points (tags, topic, keywords, wording). It is not an AI probability.");
+        VBox list = new VBox(10); ScrollPane sp = new ScrollPane(list); sp.setFitToWidth(true); sp.setPrefSize(760, 480);
+        Runnable[] load = new Runnable[1];
+        load[0] = () -> {
+            list.getChildren().clear();
+            try {
+                RelatedResult r = relatedSvc.suggest(probe, mode.getValue(), ex, 12);
+                if (r.related().isEmpty()) list.getChildren().add(new Label("No related questions found for this mode."));
+                for (RelatedSuggestion s : r.related()) {
+                    Question q = s.question(); HBox chips = new HBox(6, chip("Match score " + Math.round(s.score()), "chip-marks"), chip(q.getMarks() + " marks", null), diffChip(q.getDifficulty()), chip(shorten(q.getTopic(), 30), null));
+                    FlowPane tg = new FlowPane(6, 6); s.sharedTags().forEach(x -> tg.getChildren().add(chip(x, "chip-auto")));
+                    Label pv2 = new Label(shorten(q.getQuestionContent().strip(), 240)); pv2.setWrapText(true); pv2.setMaxWidth(690);
+                    Label why = new Label("Why: " + (s.reasons().isEmpty() ? "weak match" : String.join("; ", s.reasons()))); why.setWrapText(true); why.setMaxWidth(690); why.getStyleClass().add("sub");
+                    Button view = new Button("View"), cmp = new Button("Compare"), nr = new Button("Not related"), hide = new Button("Hide"); view.getStyleClass().add("ghost"); cmp.getStyleClass().add("ghost"); nr.getStyleClass().add("ghost"); hide.getStyleClass().add("ghost");
+                    view.setOnAction(e -> viewQuestion(q)); cmp.setOnAction(e -> compareDialog(probe, q));
+                    nr.setDisable(probe.id() == 0); hide.setDisable(probe.id() == 0);
+                    nr.setOnAction(e -> { try { relatedSvc.feedback(probe.id(), q.getQuestionId(), "UNRELATED"); load[0].run(); } catch (SQLException x) { alert(x.getMessage()); } });
+                    hide.setOnAction(e -> { try { relatedSvc.feedback(probe.id(), q.getQuestionId(), "EXCLUDE"); load[0].run(); } catch (SQLException x) { alert(x.getMessage()); } });
+                    HBox bt = new HBox(8, view, cmp);
+                    if (onAdd != null) { Button add = new Button("Add to current paper"); add.setOnAction(e -> { onAdd.accept(q); ex.add(q.getQuestionId()); load[0].run(); }); bt.getChildren().add(add); }
+                    if (onReplace != null) { Button rp = new Button("Replace selected"); rp.setOnAction(e -> { onReplace.accept(q); d.close(); }); bt.getChildren().add(rp); }
+                    bt.getChildren().addAll(nr, hide);
+                    VBox card = new VBox(6, chips, tg, pv2, why, bt); card.getStyleClass().add("qcard"); list.getChildren().add(card);
+                }
+                if (!r.duplicates().isEmpty()) {
+                    Label h2 = new Label("Possible duplicates (flagged, not recommended as alternatives)"); h2.getStyleClass().add("summary"); list.getChildren().add(h2);
+                    for (RelatedSuggestion s : r.duplicates()) { Button view = new Button("View"); view.getStyleClass().add("ghost"); view.setOnAction(e -> viewQuestion(s.question())); Label l = new Label("#" + s.question().getQuestionId() + "  " + shorten(s.question().getQuestionContent().replace("\n", " "), 70) + "   [" + s.reasons().get(0) + "]"); l.setWrapText(true); l.setMaxWidth(600); list.getChildren().add(new HBox(8, view, l)); }
+                }
+            } catch (SQLException e) { list.getChildren().add(new Label("Could not load suggestions: " + e.getMessage())); }
+        };
+        mode.setOnAction(e -> load[0].run()); gear.setOnAction(e -> { weightsDialog(); load[0].run(); }); load[0].run();
+        HBox bar = new HBox(10, new Label("Show:"), mode, gear); bar.setAlignment(Pos.CENTER_LEFT);
+        d.getDialogPane().setContent(new VBox(8, head, note, bar, sp)); d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); d.showAndWait();
+    }
+
     /* ---------- Tags ---------- */
-    private void retagQuietly(List<Question> qs) { try { tagSvc.retag(qs, null); } catch (SQLException e) { alert("Could not update tags: " + e.getMessage()); } }
+    private void retagQuietly(List<Question> qs) { invalidateRelated(); try { tagSvc.retag(qs, null); } catch (SQLException e) { alert("Could not update tags: " + e.getMessage()); } }
     private void retagById(Integer id) { if (id != null) bank.stream().filter(x -> x.getQuestionId() == id).findFirst().ifPresent(x -> retagQuietly(List.of(x))); }
     private void loadUserTags(Question q, Draft d) {
         try { for (QuestionTagInfo t : tagSvc.tagsOf(q.getQuestionId())) if (t.source().equals("MANUAL")) d.manualTags.add(t.name()); d.excludedTags.addAll(tagSvc.excludedNames(q.getQuestionId())); }
         catch (SQLException e) { alert("Could not load tags: " + e.getMessage()); }
     }
-    private void applyTags(Question q, Draft d) { try { tagSvc.applyUserTags(q, d.manualTags, d.excludedTags); } catch (SQLException e) { alert("Could not save tags: " + e.getMessage()); } }
+    private void applyTags(Question q, Draft d) { invalidateRelated(); try { tagSvc.applyUserTags(q, d.manualTags, d.excludedTags); } catch (SQLException e) { alert("Could not save tags: " + e.getMessage()); } }
     private javafx.scene.Node tagRow(Question q) {
         FlowPane fp = new FlowPane(6, 6); Label h = new Label("TAGS"); h.getStyleClass().add("summary");
         try {
@@ -611,7 +716,7 @@ public class Main extends Application {
         pr.increment(0); return Optional.of(new Object[]{ph.getText().trim(), md.getValue(), pr.getValue(), en.isSelected()});
     }
     private void refreshTagScreen() {
-        if (tagList == null) return; Tag sel = tagList.getSelectionModel().getSelectedItem();
+        invalidateRelated(); if (tagList == null) return; Tag sel = tagList.getSelectionModel().getSelectedItem();
         try {
             tagCounts = tagSvc.questionCounts(); tagList.getItems().setAll(tagSvc.allTags());
             if (sel != null) tagList.getItems().stream().filter(t -> t.id() == sel.id()).findFirst().ifPresent(t -> tagList.getSelectionModel().select(t));
