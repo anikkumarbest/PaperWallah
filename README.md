@@ -57,6 +57,17 @@ Run the commands from the folder that contains `pom.xml`.
 
 ---
 
+## Automatic tags (Phase 2)
+
+Every question gets **tags** automatically, using rules you can edit. Nothing needs the internet.
+
+- **How matching works:** the question text and the answer text are both checked. Matching ignores upper/lower case and punctuation, works on whole words only (so `class` does not match `classification`, and `int` does not match `print`), supports multi-word phrases, and has three match types: whole word, phrase, and prefix (`polymorph` matches `polymorphism`).
+- **Conflicts:** higher priority wins, then the longer phrase. Words used by one match are not reused, so "priority queue" does not also trigger a `queue` rule.
+- **Auto vs manual:** automatic tags (dashed, teal) are rebuilt whenever a question is saved, imported, or the bank is re-tagged. Manual tags (purple) are never removed by re-tagging. If an automatic tag is wrong for one question, click **x** to exclude it for that question.
+- **While you type** in the Add/Edit question window, suggested tags appear after a short pause, with a tooltip showing which phrase triggered each one. Nothing is saved until you save the question.
+- **Tags tab:** create, rename, merge and delete tags (with an optional group such as "Data Structures"), add trigger phrases with a match type and priority, switch rules on or off, preview which questions a rule would match, keep an ignore list for ambiguous words, and **Re-tag question bank** (runs with a progress window).
+- **Starter rules** for about 28 common computing tags are added on first run. They are only a starting point; edit or delete them, and add your own for any subject.
+
 ## Quick start guide
 
 1. **Question Bank** – browse the starting questions, or press **Add question** to create your own.
@@ -139,6 +150,7 @@ PaperWallah/
 - no valid combination (for example 7 marks using only 4- and 6-mark questions)
 - not enough questions in the bank
 - blueprint total mismatch
+- tagging: whole-word matching, phrases, prefix, priority and longest-phrase conflicts, question and answer both analysed, manual tags and exclusions surviving re-tagging, disabled rules, merge, starter rules
 - "correct existing" keeps the question ID, while "create new" leaves the original unchanged
 - a paper's copy stays unchanged when the bank question is edited later
 

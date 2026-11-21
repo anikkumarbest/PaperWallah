@@ -47,3 +47,5 @@
 .button.ghost:hover{-fx-background-color:#e8eaf6;}
 .button.danger{-fx-background-color:#d32f2f;}
 .button.danger:hover{-fx-background-color:#b71c1c;}
+.chip-auto{-fx-background-color:#e0f2f1;-fx-text-fill:#00695c;-fx-border-color:#80cbc4;-fx-border-radius:12;-fx-border-style:segments(4,3);}
+.chip-manual{-fx-background-color:#ede7f6;-fx-text-fill:#4527a0;-fx-border-color:#b39ddb;-fx-border-radius:12;}

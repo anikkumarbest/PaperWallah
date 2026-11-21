@@ -14,6 +14,7 @@ import java.util.stream.Collectors;
 import javafx.animation.*;
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.concurrent.Task;
 import javafx.beans.property.*;
 import javafx.collections.*;
 import javafx.collections.transformation.FilteredList;
@@ -36,6 +37,8 @@ public class Main extends Application {
     private QuestionService questionSvc; private TopicService topicSvc; private PaperService paperSvc;
     private String firstReport;
     private TextArea dbInfo;
+    private TaggingService tagSvc;
+    private ListView<Tag> tagList; private TableView<TagRule> ruleTable; private Map<Integer, Integer> tagCounts = new HashMap<>();
     private final ObservableList<Question> bank = FXCollections.observableArrayList();
     private final ObservableList<String> topics = FXCollections.observableArrayList();
     private final ObservableList<Paper> papers = FXCollections.observableArrayList();
@@ -54,7 +57,7 @@ public class Main extends Application {
     private static final Border BLACK = new Border(new BorderStroke(Color.BLACK, BorderStrokeStyle.SOLID, CornerRadii.EMPTY, new BorderWidths(1.5)));
     private static final ObservableList<Integer> MARKS = FXCollections.observableArrayList(1, 2, 3, 4, 5, 6);
 
-    static class Draft { String q = "", a = "", topic = "", section = "Section A"; int marks = 1; Difficulty d = Difficulty.MEDIUM; List<String> imgs = new ArrayList<>(); }
+    static class Draft { boolean tagsEnabled; Set<String> manualTags = new LinkedHashSet<>(), excludedTags = new LinkedHashSet<>(); String q = "", a = "", topic = "", section = "Section A"; int marks = 1; Difficulty d = Difficulty.MEDIUM; List<String> imgs = new ArrayList<>(); }
 
     /** One editable blueprint section (Mode B). */
     private class Row {
@@ -80,7 +83,7 @@ public class Main extends Application {
             a.showAndWait(); Platform.exit(); return;
         }
         tabs = new TabPane(tab("Dashboard", dashTab()), tab("Question Bank", bankTab()), tab("Generate", genTab()),
-            tab("Paper Editor", editorTab()), tab("Saved Papers", savedTab()), tab("Print Preview", printTab()), tab("Database", dbTab()));
+            tab("Paper Editor", editorTab()), tab("Saved Papers", savedTab()), tab("Print Preview", printTab()), tab("Tags", tagTab()), tab("Database", dbTab()));
         tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> refreshDash());
         refreshDash();
         Scene sc = new Scene(tabs, 1120, 740); sc.getStylesheets().add(css);
@@ -101,6 +104,8 @@ public class Main extends Application {
         topicSvc = new TopicService(db); questionSvc = new QuestionService(db); paperSvc = new PaperService(db);
         firstReport = new LegacyMigrator(db, Paths.get("PaperWallah", "data"), dir).runIfNeeded();
         reloadAll();
+        tagSvc = new TaggingService(db);
+        if (tagSvc.seedStarterIfNeeded()) tagSvc.retag(new ArrayList<>(bank), null);
     }
     private void reloadAll() throws SQLException { topics.setAll(topicSvc.load()); bank.setAll(questionSvc.loadAll()); papers.setAll(paperSvc.loadAll()); }
     /** On a failed save the in-memory lists are reloaded from the database so screen and data never disagree. */
@@ -218,6 +223,7 @@ public class Main extends Application {
         VBox box = new VBox(8, new Label("Question (code: indentation is kept; MCQ: write A) B) C) D) lines)"), q, new Label("Answer / correct option"), a,
             new HBox(10, new Label("Marks"), m, new Label("Difficulty"), df), new Label("Topic"), t);
         if (secF != null) box.getChildren().addAll(new Label("Section (pick one or type a new name)"), secF);
+        if (d.tagsEnabled) box.getChildren().add(tagPanel(d, q, a));
         box.getChildren().addAll(att, thumbs);
         ScrollPane sp = new ScrollPane(box); sp.setFitToWidth(true); sp.setPrefSize(680, 600); box.setPadding(new Insets(8));
         dlg.getDialogPane().setContent(sp); dlg.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
@@ -245,7 +251,7 @@ public class Main extends Application {
         for (Text t : List.of(qt, at)) { t.setFont(Font.font("Monospaced", 13)); t.setWrappingWidth(420); }
         box.getChildren().addAll(new HBox(6, chip("#" + q.getQuestionId(), null), chip(q.getMarks() + " marks", "chip-marks"), diffChip(q.getDifficulty())), chip(q.getTopic(), null), qh, qt);
         for (String p : q.getImagePaths()) box.getChildren().add(bigImg(p, 420));
-        box.getChildren().addAll(new Separator(), ah, at);
+        box.getChildren().addAll(new Separator(), ah, at, tagRow(q));
     }
     private javafx.scene.Node bankTab() {
         FilteredList<Question> shown = new FilteredList<>(bank, x -> true);
@@ -265,13 +271,13 @@ public class Main extends Application {
         ScrollPane ds = new ScrollPane(detail); ds.setFitToWidth(true); ds.setPrefWidth(480);
         lv.getSelectionModel().selectedItemProperty().addListener((o, a, q) -> showDetail(detail, q));
         Button add = new Button("Add question"), edit = new Button("Edit"), del = new Button("Delete"); del.getStyleClass().add("danger");
-        add.setOnAction(e -> { Draft d = new Draft(); if (form("Add question", d, null)) { Question q = new Question(editSvc.nextId(), d.q, d.a, d.marks, d.d, d.topic); q.getImagePaths().addAll(d.imgs); bank.add(q); saveBank(); refreshDash(); lv.getSelectionModel().select(q); lv.scrollTo(q); } });
+        add.setOnAction(e -> { Draft d = new Draft(); d.tagsEnabled = true; if (form("Add question", d, null)) { Question q = new Question(editSvc.nextId(), d.q, d.a, d.marks, d.d, d.topic); q.getImagePaths().addAll(d.imgs); bank.add(q); saveBank(); applyTags(q, d); refreshDash(); lv.getSelectionModel().select(q); lv.scrollTo(q); } });
         edit.setOnAction(e -> {
             Question q = lv.getSelectionModel().getSelectedItem(); if (q == null) { alert("Select a question first."); return; }
-            Draft d = new Draft(); d.q = q.getQuestionContent(); d.a = q.getAnswerContent(); d.topic = q.getTopic(); d.marks = q.getMarks(); d.d = q.getDifficulty(); d.imgs = new ArrayList<>(q.getImagePaths());
+            Draft d = new Draft(); d.tagsEnabled = true; loadUserTags(q, d); d.q = q.getQuestionContent(); d.a = q.getAnswerContent(); d.topic = q.getTopic(); d.marks = q.getMarks(); d.d = q.getDifficulty(); d.imgs = new ArrayList<>(q.getImagePaths());
             if (form("Edit question #" + q.getQuestionId(), d, null)) {
                 q.setQuestionContent(d.q); q.setAnswerContent(d.a); q.setTopic(d.topic); q.setMarks(d.marks); q.setDifficulty(d.d);
-                q.getImagePaths().clear(); q.getImagePaths().addAll(d.imgs); saveBank(); lv.refresh(); showDetail(detail, q);
+                q.getImagePaths().clear(); q.getImagePaths().addAll(d.imgs); saveBank(); applyTags(q, d); lv.refresh(); showDetail(detail, q);
             }
         });
         del.setOnAction(e -> { Question q = lv.getSelectionModel().getSelectedItem(); if (q != null && confirm("Delete question #" + q.getQuestionId() + "?")) { bank.remove(q); saveBank(); refreshDash(); } });
@@ -343,7 +349,7 @@ public class Main extends Application {
             if (current == null) return; Draft d = new Draft(); List<PaperQuestion> l = current.getQuestions(); if (!l.isEmpty()) d.section = l.get(l.size() - 1).getSectionName();
             if (form("Manual question", d, sectionNames())) {
                 PaperQuestion pq = new PaperQuestion(d.q, d.a, d.marks, d.topic, d.d, d.section); pq.getImagePaths().addAll(d.imgs); l.add(pq);
-                if (confirm("Also add this question to the question bank?")) { editSvc.addAsNew(pq); saveBank(); refreshDash(); }
+                if (confirm("Also add this question to the question bank?")) { editSvc.addAsNew(pq); saveBank(); refreshDash(); retagById(pq.getOriginalQuestionId()); }
                 refreshEditor();
             }
         });
@@ -407,8 +413,8 @@ public class Main extends Application {
             List<String> opts = List.of("Correct the existing question", "Create a new question from this", "Keep changes only in this paper");
             ChoiceDialog<String> cd = new ChoiceDialog<>(opts.get(2), opts); style(cd); cd.setTitle("Save edit"); cd.setHeaderText("How should this edit be saved?");
             QuestionEditService.Choice c = QuestionEditService.Choice.values()[cd.showAndWait().map(opts::indexOf).orElse(2)];
-            editSvc.apply(pq, c); if (c != QuestionEditService.Choice.PAPER_ONLY) { saveBank(); refreshDash(); }
-        } else if (changed && confirm("Also add this manual question to the question bank?")) { editSvc.addAsNew(pq); saveBank(); refreshDash(); }
+            editSvc.apply(pq, c); if (c != QuestionEditService.Choice.PAPER_ONLY) { saveBank(); refreshDash(); retagById(pq.getOriginalQuestionId()); }
+        } else if (changed && confirm("Also add this manual question to the question bank?")) { editSvc.addAsNew(pq); saveBank(); refreshDash(); retagById(pq.getOriginalQuestionId()); }
         refreshEditor();
     }
     private void replaceQuestion(int i) {
@@ -532,6 +538,143 @@ public class Main extends Application {
         }
         job.endJob();
     }
+    /* ---------- Tags ---------- */
+    private void retagQuietly(List<Question> qs) { try { tagSvc.retag(qs, null); } catch (SQLException e) { alert("Could not update tags: " + e.getMessage()); } }
+    private void retagById(Integer id) { if (id != null) bank.stream().filter(x -> x.getQuestionId() == id).findFirst().ifPresent(x -> retagQuietly(List.of(x))); }
+    private void loadUserTags(Question q, Draft d) {
+        try { for (QuestionTagInfo t : tagSvc.tagsOf(q.getQuestionId())) if (t.source().equals("MANUAL")) d.manualTags.add(t.name()); d.excludedTags.addAll(tagSvc.excludedNames(q.getQuestionId())); }
+        catch (SQLException e) { alert("Could not load tags: " + e.getMessage()); }
+    }
+    private void applyTags(Question q, Draft d) { try { tagSvc.applyUserTags(q, d.manualTags, d.excludedTags); } catch (SQLException e) { alert("Could not save tags: " + e.getMessage()); } }
+    private javafx.scene.Node tagRow(Question q) {
+        FlowPane fp = new FlowPane(6, 6); Label h = new Label("TAGS"); h.getStyleClass().add("summary");
+        try {
+            Map<Integer, TagMatch> why = tagSvc.analyze(q.getQuestionContent(), q.getAnswerContent());
+            for (QuestionTagInfo t : tagSvc.tagsOf(q.getQuestionId())) {
+                boolean auto = t.source().equals("AUTO"); Label c = chip(t.name() + (auto ? "  (auto)" : "  (manual)"), auto ? "chip-auto" : "chip-manual");
+                TagMatch m = why.get(t.tagId()); if (auto && m != null) Tooltip.install(c, new Tooltip("Matched \"" + m.phrase() + "\" in the " + m.where() + " (confidence " + Math.round(m.confidence() * 100) + "%)"));
+                fp.getChildren().add(c);
+            }
+            if (fp.getChildren().isEmpty()) fp.getChildren().add(new Label("No tags yet"));
+        } catch (SQLException e) { fp.getChildren().add(new Label("Tags unavailable")); }
+        return new VBox(6, h, fp);
+    }
+    /** Live tag suggestions while typing (debounced; nothing is written until the question is saved). */
+    private javafx.scene.Node tagPanel(Draft d, TextArea q, TextArea a) {
+        FlowPane auto = new FlowPane(6, 6), manual = new FlowPane(6, 6), excl = new FlowPane(6, 6);
+        ComboBox<String> pick = new ComboBox<>(); pick.setEditable(true); pick.setPromptText("Type or choose a tag");
+        try { pick.getItems().setAll(tagSvc.allTags().stream().map(Tag::name).collect(Collectors.toList())); } catch (SQLException e) { /* list stays empty */ }
+        Button add = new Button("Add tag"); add.getStyleClass().add("ghost");
+        Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> {
+            auto.getChildren().clear(); manual.getChildren().clear(); excl.getChildren().clear();
+            try {
+                Map<Integer, String> names = tagSvc.tagNames();
+                for (TagMatch m : tagSvc.analyze(q.getText(), a.getText()).values()) {
+                    String n = names.get(m.tagId()); if (n == null || d.manualTags.contains(n) || d.excludedTags.contains(n)) continue;
+                    Label c = chip(n, "chip-auto"); Tooltip.install(c, new Tooltip("Matched \"" + m.phrase() + "\" in the " + m.where()));
+                    Button x = new Button("x"); x.getStyleClass().add("danger"); x.setOnAction(e -> { d.excludedTags.add(n); refresh[0].run(); });
+                    auto.getChildren().add(new HBox(3, c, x));
+                }
+            } catch (SQLException e) { auto.getChildren().add(new Label("Suggestions unavailable")); }
+            if (auto.getChildren().isEmpty()) auto.getChildren().add(new Label("None yet - suggestions appear as you type"));
+            for (String n : d.manualTags) { Button x = new Button("x"); x.getStyleClass().add("danger"); x.setOnAction(e -> { d.manualTags.remove(n); refresh[0].run(); }); manual.getChildren().add(new HBox(3, chip(n, "chip-manual"), x)); }
+            for (String n : d.excludedTags) { Button r = new Button("restore"); r.getStyleClass().add("ghost"); r.setOnAction(e -> { d.excludedTags.remove(n); refresh[0].run(); }); excl.getChildren().add(new HBox(3, chip(n, null), r)); }
+        };
+        PauseTransition deb = new PauseTransition(Duration.millis(450)); deb.setOnFinished(e -> refresh[0].run());
+        q.textProperty().addListener((o, x, y) -> deb.playFromStart()); a.textProperty().addListener((o, x, y) -> deb.playFromStart());
+        add.setOnAction(e -> { String n = pick.getEditor().getText().trim(); if (!n.isEmpty()) { d.manualTags.add(n); d.excludedTags.remove(n); pick.getEditor().clear(); refresh[0].run(); } });
+        refresh[0].run(); Label h = new Label("TAGS"); h.getStyleClass().add("summary");
+        return new VBox(6, h, new Label("Suggested automatically (hover for the reason, x = not relevant)"), auto, new Label("Manual tags"), manual, new HBox(8, pick, add), new Label("Excluded for this question"), excl);
+    }
+    private void tagErr(SQLException e) { alert(e.getMessage() != null && e.getMessage().contains("UNIQUE") ? "That name or phrase already exists." : "Tag operation failed: " + e.getMessage()); }
+    private Optional<String[]> textDialog(String title, String l1, String v1, String l2, String v2) {
+        Dialog<ButtonType> d = new Dialog<>(); d.setTitle(title); style(d); TextField a = new TextField(v1), b = new TextField(v2); a.setPrefWidth(320);
+        GridPane g = new GridPane(); g.setHgap(10); g.setVgap(8); g.setPadding(new Insets(12)); g.add(new Label(l1), 0, 0); g.add(a, 1, 0); g.add(new Label(l2), 0, 1); g.add(b, 1, 1);
+        d.getDialogPane().setContent(g); d.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        d.getDialogPane().lookupButton(ButtonType.OK).addEventFilter(ActionEvent.ACTION, ev -> { if (a.getText().isBlank()) { alert("A name is required."); ev.consume(); } });
+        return d.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK ? Optional.of(new String[]{a.getText().trim(), b.getText().trim()}) : Optional.empty();
+    }
+    private Optional<Object[]> ruleDialog(TagRule r) {
+        Dialog<ButtonType> d = new Dialog<>(); d.setTitle(r == null ? "New rule" : "Edit rule"); style(d);
+        TextField ph = new TextField(r == null ? "" : r.phrase()); ph.setPrefWidth(320);
+        ChoiceBox<MatchMode> md = new ChoiceBox<>(FXCollections.observableArrayList(MatchMode.values())); md.setValue(r == null ? MatchMode.PHRASE : r.mode());
+        Spinner<Integer> pr = new Spinner<>(-100, 1000, r == null ? 0 : r.priority()); pr.setEditable(true);
+        CheckBox en = new CheckBox("Enabled"); en.setSelected(r == null || r.enabled());
+        GridPane g = new GridPane(); g.setHgap(10); g.setVgap(8); g.setPadding(new Insets(12));
+        g.add(new Label("Keyword or phrase"), 0, 0); g.add(ph, 1, 0); g.add(new Label("Match type"), 0, 1); g.add(md, 1, 1); g.add(new Label("Priority"), 0, 2); g.add(pr, 1, 2); g.add(en, 1, 3);
+        Label help = new Label("EXACT_WORD: one whole word.  PHRASE: whole words in order.  PREFIX: last word may continue (polymorph matches polymorphism).\nHigher priority wins; then the longer phrase. Matching ignores case and punctuation and never matches inside other words.");
+        help.setWrapText(true); help.setMaxWidth(430);
+        d.getDialogPane().setContent(new VBox(8, g, help)); d.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        d.getDialogPane().lookupButton(ButtonType.OK).addEventFilter(ActionEvent.ACTION, ev -> { if (TextUtil.normalize(ph.getText()).isEmpty()) { alert("Enter at least one word."); ev.consume(); } });
+        if (d.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return Optional.empty();
+        pr.increment(0); return Optional.of(new Object[]{ph.getText().trim(), md.getValue(), pr.getValue(), en.isSelected()});
+    }
+    private void refreshTagScreen() {
+        if (tagList == null) return; Tag sel = tagList.getSelectionModel().getSelectedItem();
+        try {
+            tagCounts = tagSvc.questionCounts(); tagList.getItems().setAll(tagSvc.allTags());
+            if (sel != null) tagList.getItems().stream().filter(t -> t.id() == sel.id()).findFirst().ifPresent(t -> tagList.getSelectionModel().select(t));
+        } catch (SQLException e) { tagErr(e); }
+        refreshRules(); tagList.refresh();
+    }
+    private void refreshRules() {
+        Tag t = tagList.getSelectionModel().getSelectedItem();
+        try { ruleTable.getItems().setAll(t == null ? List.<TagRule>of() : tagSvc.rulesFor(t.id())); } catch (SQLException e) { tagErr(e); }
+    }
+    private javafx.scene.Node tagTab() {
+        tagList = new ListView<>(); tagList.getStyleClass().add("q-list"); tagList.setPrefWidth(330);
+        tagList.setCellFactory(l -> new ListCell<>() { @Override protected void updateItem(Tag t, boolean e) { super.updateItem(t, e); setText(e || t == null ? null : t.name() + (t.group() == null ? "" : "   [" + t.group() + "]") + "   - " + tagCounts.getOrDefault(t.id(), 0) + " questions"); } });
+        ruleTable = new TableView<>(); ruleTable.setPlaceholder(new Label("Select a tag to see its trigger phrases"));
+        String[] heads = {"Trigger phrase", "Match type", "Priority", "Enabled"}; int[] widths = {260, 110, 80, 80};
+        for (int i = 0; i < 4; i++) { final int k = i; TableColumn<TagRule, String> c = new TableColumn<>(heads[i]); c.setPrefWidth(widths[i]);
+            c.setCellValueFactory(cd -> { TagRule r = cd.getValue(); return new javafx.beans.property.SimpleStringProperty(k == 0 ? r.phrase() : k == 1 ? r.mode().name() : k == 2 ? "" + r.priority() : r.enabled() ? "yes" : "no"); }); ruleTable.getColumns().add(c); }
+        tagList.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> refreshRules());
+        Button nt = new Button("New tag"), et = new Button("Edit tag"), mt = new Button("Merge into..."), dt = new Button("Delete tag"); dt.getStyleClass().add("danger");
+        nt.setOnAction(e -> textDialog("New tag", "Tag name", "", "Group / subject (optional)", "").ifPresent(v -> { try { tagSvc.createTag(v[0], v[1]); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } }));
+        et.setOnAction(e -> { Tag t = tagList.getSelectionModel().getSelectedItem(); if (t == null) return;
+            textDialog("Edit tag", "Tag name", t.name(), "Group / subject", t.group() == null ? "" : t.group()).ifPresent(v -> { try { tagSvc.updateTag(t.id(), v[0], v[1]); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } }); });
+        mt.setOnAction(e -> { Tag t = tagList.getSelectionModel().getSelectedItem(); if (t == null) return;
+            List<String> others = tagList.getItems().stream().filter(x -> x.id() != t.id()).map(Tag::name).collect(Collectors.toList()); if (others.isEmpty()) return;
+            ChoiceDialog<String> cd = new ChoiceDialog<>(others.get(0), others); style(cd); cd.setHeaderText("Merge \"" + t.name() + "\" into which tag?");
+            cd.showAndWait().ifPresent(n -> tagList.getItems().stream().filter(x -> x.name().equals(n)).findFirst().ifPresent(target -> { if (confirm("Move all rules and questions of \"" + t.name() + "\" into \"" + n + "\" and delete \"" + t.name() + "\"?")) try { tagSvc.mergeTags(t.id(), target.id()); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } })); });
+        dt.setOnAction(e -> { Tag t = tagList.getSelectionModel().getSelectedItem(); if (t != null && confirm("Delete tag \"" + t.name() + "\", its rules and its links to questions?")) try { tagSvc.deleteTag(t.id()); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } });
+        Button ar = new Button("Add rule"), er = new Button("Edit rule"), tr = new Button("Enable / disable"), pr = new Button("Preview matches"), dr = new Button("Delete rule"); dr.getStyleClass().add("danger");
+        ar.setOnAction(e -> { Tag t = tagList.getSelectionModel().getSelectedItem(); if (t == null) { alert("Select a tag first."); return; }
+            ruleDialog(null).ifPresent(v -> { try { tagSvc.addRule(t.id(), (String) v[0], (MatchMode) v[1], (Integer) v[2]); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } }); });
+        er.setOnAction(e -> { TagRule r = ruleTable.getSelectionModel().getSelectedItem(); if (r == null) return;
+            ruleDialog(r).ifPresent(v -> { try { tagSvc.updateRule(new TagRule(r.id(), (String) v[0], "", r.tagId(), (MatchMode) v[1], (Boolean) v[3], (Integer) v[2])); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } }); });
+        tr.setOnAction(e -> { TagRule r = ruleTable.getSelectionModel().getSelectedItem(); if (r != null) try { tagSvc.setRuleEnabled(r, !r.enabled()); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } });
+        dr.setOnAction(e -> { TagRule r = ruleTable.getSelectionModel().getSelectedItem(); if (r != null && confirm("Delete the rule \"" + r.phrase() + "\"?")) try { tagSvc.deleteRule(r.id()); refreshTagScreen(); } catch (SQLException ex) { tagErr(ex); } });
+        pr.setOnAction(e -> { TagRule r = ruleTable.getSelectionModel().getSelectedItem(); if (r == null) { alert("Select a rule first."); return; }
+            List<String> hits = tagSvc.previewRule(r, new ArrayList<>(bank)); Dialog<ButtonType> d = new Dialog<>(); d.setTitle("Rule preview"); style(d);
+            TextArea ta = area(hits.size() + " question(s) match \"" + r.phrase() + "\":\n\n" + String.join("\n\n", hits), 18); ta.setEditable(false); ta.setWrapText(true); ta.setPrefWidth(680);
+            d.getDialogPane().setContent(ta); d.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); d.showAndWait(); });
+        TextField ignore = new TextField(); ignore.setPrefWidth(360); ignore.setPromptText("words to ignore, separated by commas");
+        try { ignore.setText(tagSvc.ignoreWords()); } catch (SQLException e) { /* leave blank */ }
+        Button saveIgnore = new Button("Save ignore list"); saveIgnore.getStyleClass().add("ghost");
+        saveIgnore.setOnAction(e -> { try { tagSvc.setIgnoreWords(ignore.getText()); alert("Saved. Re-tag the question bank to apply it."); } catch (SQLException ex) { tagErr(ex); } });
+        Button retag = new Button("Re-tag question bank"); retag.setOnAction(e -> runRetag());
+        VBox left = new VBox(8, new Label("TAGS"), tagList, new HBox(6, nt, et), new HBox(6, mt, dt)); VBox.setVgrow(tagList, Priority.ALWAYS);
+        VBox right = new VBox(8, new Label("TRIGGER PHRASES FOR THE SELECTED TAG"), ruleTable, new HBox(6, ar, er, tr), new HBox(6, pr, dr)); VBox.setVgrow(ruleTable, Priority.ALWAYS); HBox.setHgrow(right, Priority.ALWAYS);
+        for (Label l : List.of((Label) left.getChildren().get(0), (Label) right.getChildren().get(0))) l.getStyleClass().add("summary");
+        HBox body = new HBox(14, left, right); VBox.setVgrow(body, Priority.ALWAYS);
+        refreshTagScreen();
+        return titled("Tag Manager", body, new HBox(10, new Label("Ignore words:"), ignore, saveIgnore, retag));
+    }
+    /** Re-tags the whole bank on a background thread with a progress window, so the screen stays responsive. */
+    private void runRetag() {
+        List<Question> snapshot = new ArrayList<>(bank);
+        Task<Void> task = new Task<>() { @Override protected Void call() throws Exception { tagSvc.retag(snapshot, p -> updateProgress(p, 1.0)); return null; } };
+        ProgressBar pb = new ProgressBar(0); pb.setPrefWidth(360); pb.progressProperty().bind(task.progressProperty());
+        Stage ps = new Stage(); ps.initOwner(stage); ps.initModality(Modality.APPLICATION_MODAL); ps.setTitle("Re-tagging"); ps.setOnCloseRequest(ev -> ev.consume());
+        VBox pbox = new VBox(12, new Label("Re-tagging " + snapshot.size() + " questions... manual tags are kept."), pb); pbox.setPadding(new Insets(20)); pbox.setAlignment(Pos.CENTER);
+        Scene sc = new Scene(pbox); sc.getStylesheets().add(css); ps.setScene(sc);
+        task.setOnSucceeded(ev -> { ps.close(); refreshTagScreen(); alert("Re-tagging finished for " + snapshot.size() + " questions."); });
+        task.setOnFailed(ev -> { ps.close(); alert("Re-tagging failed and was rolled back: " + task.getException().getMessage()); });
+        Thread t = new Thread(task, "retag"); t.setDaemon(true); t.start(); ps.show();
+    }
+
     /* ---------- Database screen, CSV import / export, backup ---------- */
     private javafx.scene.Node dbTab() {
         dbInfo = area("", 16); dbInfo.setEditable(false); VBox.setVgrow(dbInfo, Priority.ALWAYS);
@@ -567,15 +710,15 @@ public class Main extends Application {
         TextArea ta = area(pv2.toString(), 14); ta.setEditable(false); ta.setPrefWidth(620);
         d.getDialogPane().setContent(new VBox(10, ta, new HBox(8, new Label("If a question already exists:"), policy))); d.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
         if (valid.isEmpty() || d.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) { if (valid.isEmpty()) alert("No valid rows to import."); return; }
-        int mode = policy.getItems().indexOf(policy.getValue()), added = 0, updated = 0, skipped = 0;
+        int mode = policy.getItems().indexOf(policy.getValue()), added = 0, updated = 0, skipped = 0; List<Question> touched = new ArrayList<>();
         for (ImportExportService.Row r : valid) {
             Question ex = byText.get(ImportExportService.norm(r.question()));
             if (ex != null && mode == 0) { skipped++; continue; }
             if (!topics.contains(r.topic())) topics.add(r.topic());
-            if (ex != null && mode == 1) { ex.setAnswerContent(r.answer()); ex.setMarks(r.marks()); ex.setDifficulty(r.difficulty()); ex.setTopic(r.topic()); ex.getImagePaths().clear(); ex.getImagePaths().addAll(r.images()); updated++; }
-            else { Question q = new Question(editSvc.nextId(), r.question(), r.answer(), r.marks(), r.difficulty(), r.topic()); q.getImagePaths().addAll(r.images()); bank.add(q); byText.putIfAbsent(ImportExportService.norm(r.question()), q); added++; }
+            if (ex != null && mode == 1) { ex.setAnswerContent(r.answer()); ex.setMarks(r.marks()); ex.setDifficulty(r.difficulty()); ex.setTopic(r.topic()); ex.getImagePaths().clear(); ex.getImagePaths().addAll(r.images()); touched.add(ex); updated++; }
+            else { Question q = new Question(editSvc.nextId(), r.question(), r.answer(), r.marks(), r.difficulty(), r.topic()); q.getImagePaths().addAll(r.images()); bank.add(q); byText.putIfAbsent(ImportExportService.norm(r.question()), q); touched.add(q); added++; }
         }
-        saveBank(); refreshDash(); alert("Import finished: " + added + " added, " + updated + " updated, " + skipped + " skipped.");
+        saveBank(); retagQuietly(touched); refreshDash(); alert("Import finished: " + added + " added, " + updated + " updated, " + skipped + " skipped.");
     }
     public static void main(String[] a) { launch(a); }
 }

@@ -16,12 +16,12 @@ class DatabaseTest {
     private Question q(int id, String text, String topic) { return new Question(id, text, "ans " + id, 3, Difficulty.MEDIUM, topic); }
 
     @Test void schemaCreatedAndForeignKeysOn() throws Exception {
-        assertEquals(1, db.schemaVersion());
+        assertEquals(2, db.schemaVersion());
         try (Statement s = db.conn().createStatement(); ResultSet r = s.executeQuery("PRAGMA foreign_keys")) { assertEquals(1, r.getInt(1)); }
         assertThrows(SQLException.class, () -> { try (Statement s = db.conn().createStatement()) { s.executeUpdate("INSERT INTO questions(question_text,marks,difficulty,topic_id) VALUES('x',1,'EASY',999)"); } });
     }
     @Test void reopeningDoesNotReapplyMigrations() throws Exception {
-        db.close(); db = new DatabaseManager(tmp.resolve("t.db")); db.open(); assertEquals(1, db.schemaVersion());
+        db.close(); db = new DatabaseManager(tmp.resolve("t.db")); db.open(); assertEquals(2, db.schemaVersion());
     }
     @Test void questionCrudThroughServices() throws Exception {
         TopicService ts = new TopicService(db); QuestionService qs = new QuestionService(db);
