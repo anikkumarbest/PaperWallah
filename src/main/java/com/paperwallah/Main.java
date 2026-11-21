@@ -1,12 +1,19 @@
 package com.paperwallah;
+import com.paperwallah.config.DatabaseManager;
 import com.paperwallah.model.*;
 import com.paperwallah.service.*;
 import com.paperwallah.strategy.*;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.SQLException;
 import java.util.*;
 import java.util.stream.Collectors;
 import javafx.animation.*;
 import javafx.application.Application;
+import javafx.application.Platform;
 import javafx.beans.property.*;
 import javafx.collections.*;
 import javafx.collections.transformation.FilteredList;
@@ -24,10 +31,14 @@ import javafx.stage.*;
 import javafx.util.Duration;
 
 public class Main extends Application {
-    private final StorageService st = new StorageService();
-    private final ObservableList<Question> bank = FXCollections.observableArrayList(st.loadQuestions());
-    private final ObservableList<String> topics = FXCollections.observableArrayList(st.loadTopics());
-    private final ObservableList<Paper> papers = FXCollections.observableArrayList(st.loadPapers());
+    private StorageService st;
+    private DatabaseManager db;
+    private QuestionService questionSvc; private TopicService topicSvc; private PaperService paperSvc;
+    private String firstReport;
+    private TextArea dbInfo;
+    private final ObservableList<Question> bank = FXCollections.observableArrayList();
+    private final ObservableList<String> topics = FXCollections.observableArrayList();
+    private final ObservableList<Paper> papers = FXCollections.observableArrayList();
     private final QuestionEditService editSvc = new QuestionEditService(bank);
     private final String css = Main.class.getResource("/style.css").toExternalForm();
     private Paper current, printPaper;
@@ -63,12 +74,19 @@ public class Main extends Application {
 
     @Override public void start(Stage s) {
         stage = s;
+        try { initData(); }
+        catch (Exception e) {
+            Alert a = new Alert(Alert.AlertType.ERROR, "PaperWallah could not open its database.\n\n" + e.getMessage() + "\n\nThe database was not changed or recreated. Location: " + DatabaseManager.defaultDataDir());
+            a.showAndWait(); Platform.exit(); return;
+        }
         tabs = new TabPane(tab("Dashboard", dashTab()), tab("Question Bank", bankTab()), tab("Generate", genTab()),
-            tab("Paper Editor", editorTab()), tab("Saved Papers", savedTab()), tab("Print Preview", printTab()));
+            tab("Paper Editor", editorTab()), tab("Saved Papers", savedTab()), tab("Print Preview", printTab()), tab("Database", dbTab()));
         tabs.getSelectionModel().selectedItemProperty().addListener((o, a, b) -> refreshDash());
         refreshDash();
         Scene sc = new Scene(tabs, 1120, 740); sc.getStylesheets().add(css);
         s.setScene(sc); s.setTitle("PaperWallah"); s.show();
+        if (firstReport != null) { Alert a = new Alert(Alert.AlertType.INFORMATION); style(a); a.setTitle("Data migration"); a.setHeaderText("Your data was moved to the new SQLite database");
+            TextArea ta = area(firstReport, 16); ta.setEditable(false); ta.setPrefWidth(640); a.getDialogPane().setContent(ta); a.showAndWait(); }
     }
 
     /* ---------- helpers ---------- */
@@ -76,10 +94,21 @@ public class Main extends Application {
     private void style(Dialog<?> d) { d.getDialogPane().getStylesheets().add(css); }
     private void alert(String m) { Alert a = new Alert(Alert.AlertType.WARNING, m); style(a); a.showAndWait(); }
     private boolean confirm(String m) { Alert a = new Alert(Alert.AlertType.CONFIRMATION, m); style(a); return a.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK; }
-    private void saveBank() { try { st.saveQuestions(bank); } catch (IOException e) { alert("Could not save questions.csv (is it open in another program?): " + e.getMessage()); } }
-    private void saveTopics() { try { st.saveTopics(topics); } catch (IOException e) { alert("Could not save topics: " + e.getMessage()); } }
-    private void savePapers() { try { st.savePapers(papers); } catch (IOException e) { alert("Could not save papers: " + e.getMessage()); } }
-    private void refreshDash() { sQ.setText("" + bank.size()); sT.setText("" + topics.size()); sP.setText("" + papers.size()); }
+    private void initData() throws Exception {
+        Path dir = DatabaseManager.defaultDataDir();
+        db = new DatabaseManager(dir.resolve("PaperWallah.db")); db.open();
+        st = new StorageService(dir.resolve("images"));
+        topicSvc = new TopicService(db); questionSvc = new QuestionService(db); paperSvc = new PaperService(db);
+        firstReport = new LegacyMigrator(db, Paths.get("PaperWallah", "data"), dir).runIfNeeded();
+        reloadAll();
+    }
+    private void reloadAll() throws SQLException { topics.setAll(topicSvc.load()); bank.setAll(questionSvc.loadAll()); papers.setAll(paperSvc.loadAll()); }
+    /** On a failed save the in-memory lists are reloaded from the database so screen and data never disagree. */
+    private void failed(String what, SQLException e) { alert("Could not save " + what + ": " + e.getMessage()); try { reloadAll(); } catch (SQLException ex) { alert("Could not reload data: " + ex.getMessage()); } }
+    private void saveBank() { try { questionSvc.sync(bank); } catch (SQLException e) { failed("questions", e); } }
+    private void saveTopics() { try { topicSvc.sync(topics); } catch (SQLException e) { failed("topics", e); } }
+    private void savePapers() { try { paperSvc.sync(papers); } catch (SQLException e) { failed("papers", e); } }
+    private void refreshDash() { sQ.setText("" + bank.size()); sT.setText("" + topics.size()); sP.setText("" + papers.size()); refreshDb(); }
     private Paper deepCopy(Paper p) {
         try (ByteArrayOutputStream b = new ByteArrayOutputStream(); ObjectOutputStream o = new ObjectOutputStream(b)) {
             o.writeObject(p); o.flush();
@@ -502,6 +531,51 @@ public class Main extends Application {
             if (!job.printPage(pg)) { alert("Printing failed."); break; }
         }
         job.endJob();
+    }
+    /* ---------- Database screen, CSV import / export, backup ---------- */
+    private javafx.scene.Node dbTab() {
+        dbInfo = area("", 16); dbInfo.setEditable(false); VBox.setVgrow(dbInfo, Priority.ALWAYS);
+        Button imp = new Button("Import questions (CSV)"), exp = new Button("Export questions (CSV)"), expT = new Button("Export topics (TXT)"), bk = new Button("Back up database");
+        imp.setOnAction(e -> importCsv());
+        exp.setOnAction(e -> { File f = saveFile("questions.csv", "CSV files", "*.csv"); if (f != null) try { ImportExportService.exportQuestions(bank, f.toPath()); alert("Exported " + bank.size() + " questions."); } catch (IOException ex) { alert("Export failed: " + ex.getMessage()); } });
+        expT.setOnAction(e -> { File f = saveFile("topics.txt", "Text files", "*.txt"); if (f != null) try { ImportExportService.exportTopics(topics, f.toPath()); alert("Exported " + topics.size() + " topics."); } catch (IOException ex) { alert("Export failed: " + ex.getMessage()); } });
+        bk.setOnAction(e -> { File f = saveFile("PaperWallah-backup-" + java.time.LocalDate.now() + ".db", "Database backup", "*.db"); if (f == null) return;
+            try { f.delete(); BackupService.backup(db, f.toPath()); alert("Backup saved to " + f); } catch (SQLException ex) { alert("Backup failed: " + ex.getMessage()); } });
+        refreshDb();
+        return titled("Database", new HBox(10, imp, exp, expT, bk), dbInfo);
+    }
+    private File saveFile(String name, String desc, String ext) { FileChooser fc = new FileChooser(); fc.setInitialFileName(name); fc.getExtensionFilters().add(new FileChooser.ExtensionFilter(desc, ext)); return fc.showSaveDialog(stage); }
+    private void refreshDb() {
+        if (dbInfo == null || db == null) return;
+        String ver; try { ver = "" + db.schemaVersion(); } catch (SQLException e) { ver = "unknown"; }
+        dbInfo.setText("Database file: " + db.file() + "\nStatus: connected (SQLite, WAL mode, foreign keys on)\nSchema version: " + ver + "\nImages folder: " + db.file().getParent().resolve("images")
+            + "\n\nRecords\n  Topics: " + topics.size() + "\n  Questions: " + bank.size() + "\n  Saved papers: " + papers.size() + "\n\n--- Last migration report ---\n" + lastReport());
+    }
+    private String lastReport() { try { return db.setting("migration_report", "(none)"); } catch (SQLException e) { return "(unavailable)"; } }
+    private void importCsv() {
+        FileChooser fc = new FileChooser(); fc.getExtensionFilters().add(new FileChooser.ExtensionFilter("CSV files", "*.csv")); File f = fc.showOpenDialog(stage); if (f == null) return;
+        List<ImportExportService.Row> rows;
+        try { rows = ImportExportService.parse(f.toPath()); } catch (IOException | RuntimeException e) { alert("Cannot read this CSV: " + e.getMessage()); return; }
+        Map<String, Question> byText = new HashMap<>(); for (Question q : bank) byText.putIfAbsent(ImportExportService.norm(q.getQuestionContent()), q);
+        List<ImportExportService.Row> valid = rows.stream().filter(r -> r.error() == null).collect(Collectors.toList());
+        long dups = valid.stream().filter(r -> byText.containsKey(ImportExportService.norm(r.question()))).count();
+        StringBuilder pv2 = new StringBuilder("Rows read: " + rows.size() + "\nValid: " + valid.size() + "\nInvalid: " + (rows.size() - valid.size()) + "\nDuplicates of existing questions: " + dups + "\n");
+        rows.stream().filter(r -> r.error() != null).limit(8).forEach(r -> pv2.append("\n  line ").append(r.line()).append(": ").append(r.error()));
+        pv2.append("\n\nPreview:"); valid.stream().limit(6).forEach(r -> pv2.append("\n  [").append(r.marks()).append("] ").append(shorten(r.topic(), 30)).append(": ").append(shorten(r.question().replace("\n", " "), 60)));
+        Dialog<ButtonType> d = new Dialog<>(); d.setTitle("Import preview"); style(d);
+        ChoiceBox<String> policy = new ChoiceBox<>(FXCollections.observableArrayList("Skip duplicates", "Update existing question", "Import duplicates as new")); policy.setValue("Skip duplicates");
+        TextArea ta = area(pv2.toString(), 14); ta.setEditable(false); ta.setPrefWidth(620);
+        d.getDialogPane().setContent(new VBox(10, ta, new HBox(8, new Label("If a question already exists:"), policy))); d.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        if (valid.isEmpty() || d.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) { if (valid.isEmpty()) alert("No valid rows to import."); return; }
+        int mode = policy.getItems().indexOf(policy.getValue()), added = 0, updated = 0, skipped = 0;
+        for (ImportExportService.Row r : valid) {
+            Question ex = byText.get(ImportExportService.norm(r.question()));
+            if (ex != null && mode == 0) { skipped++; continue; }
+            if (!topics.contains(r.topic())) topics.add(r.topic());
+            if (ex != null && mode == 1) { ex.setAnswerContent(r.answer()); ex.setMarks(r.marks()); ex.setDifficulty(r.difficulty()); ex.setTopic(r.topic()); ex.getImagePaths().clear(); ex.getImagePaths().addAll(r.images()); updated++; }
+            else { Question q = new Question(editSvc.nextId(), r.question(), r.answer(), r.marks(), r.difficulty(), r.topic()); q.getImagePaths().addAll(r.images()); bank.add(q); byText.putIfAbsent(ImportExportService.norm(r.question()), q); added++; }
+        }
+        saveBank(); refreshDash(); alert("Import finished: " + added + " added, " + updated + " updated, " + skipped + " skipped.");
     }
     public static void main(String[] a) { launch(a); }
 }

@@ -26,6 +26,7 @@ public class Paper implements Serializable {
     public void setInstructions(String s) { instructions = s; }
     public String getGenerationMode() { return generationMode; }
     public LocalDate getCreationDate() { return creationDate; }
+    public void setCreationDate(LocalDate d) { if (d != null) creationDate = d; }
     public List<PaperQuestion> getQuestions() { return questions; }
     public int getTotalMarks() { return questions.stream().mapToInt(PaperQuestion::getMarks).sum(); }
 }
